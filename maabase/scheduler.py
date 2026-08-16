@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 import re
 
+from .valuation import metrics_daily_value
+
 
 BASE_RECOVERY_PER_HOUR = 4.0
 
@@ -139,14 +141,8 @@ def _fiammetta_audit(
 
 
 def _production_score(team: dict) -> float:
-    """A transparent, scale-balanced score used only to allocate A/B work time."""
-    metrics = team.get("metrics") or {}
-    return (
-        float(metrics.get("lmd_per_day", 0) or 0) / 10_000.0
-        + float(metrics.get("exp_per_day", 0) or 0) / 10_000.0
-        + float(metrics.get("orundum_per_day", 0) or 0) / 240.0
-        + max(0.0, float(metrics.get("gold_made_per_day", 0) or 0)) / 40.0
-    )
+    """Value a complete shift in the same unit used by assignment search."""
+    return metrics_daily_value(team.get("metrics") or {})
 
 
 def _choose_durations(
@@ -208,6 +204,22 @@ def _average_metrics(a: dict, b: dict, a_hours: float = 1.0, b_hours: float = 1.
         if isinstance(a.get(key), (int, float)) and isinstance(b.get(key), (int, float)):
             result[key] = round((float(a[key]) * a_hours + float(b[key]) * b_hours) / total, 2)
     result["drone_target"] = "A/B 两套排班按实际在岗时长加权"
+    effects = [a.get("drone_effect") or {}, b.get("drone_effect") or {}]
+    effect_keys = {
+        "equivalent_hours", "lmd_per_day", "exp_per_day", "gold_made_per_day",
+        "gold_used_per_day", "shards_made_per_day", "shards_used_per_day", "orundum_per_day",
+    }
+    result["drone_effect"] = {
+        key: round(
+            (float(effects[0].get(key, 0) or 0) * a_hours + float(effects[1].get(key, 0) or 0) * b_hours) / total,
+            3,
+        )
+        for key in effect_keys
+    }
+    result["drone_effect"].update({
+        "target_kind": "weighted_rotation",
+        "target": "A/B 各自选择的目标房间，按实际在岗时长加权",
+    })
     net = float(result.get("gold_net_per_day", 0))
     inventory = float(a.get("gold_inventory", 0))
     result["gold_inventory"] = inventory
@@ -379,6 +391,9 @@ def build_rotation(
         shift_rooms = []
         for room in _all_rooms(teams[label]):
             rates = _morale_rates(room)
+            intrinsic_limit = _team_duration(
+                {"rooms": [room], "support_rooms": []}, collection, floor, 36.0
+            )
             phases = [{
                 **profile,
                 "phases": [{**phase, "start": start + phase["start_hour"], "end": min(end, start + phase["end_hour"])}
@@ -391,6 +406,9 @@ def build_rotation(
                 "operators": room.get("operators", []), "details": room.get("details", []),
                 "efficiency": room.get("efficiency", 0), "time_profiles": phases,
                 "morale_min_end": round(max(0.0, min_end), 2),
+                "morale_rates": rates,
+                "safe_work_hours": intrinsic_limit,
+                "scheduled_work_hours": round(end - start, 3),
             }
             shift_rooms.append(event)
             room_rows.setdefault(room["room"], {"room": room["room"], "key": room.get("key"), "events": []})["events"].append(event)

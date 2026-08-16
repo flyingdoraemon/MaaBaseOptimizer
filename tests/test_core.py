@@ -10,7 +10,8 @@ from maabase.model import _orundum_economics, _trade_economics, active_skills, e
 from maabase.morale import analyze_morale
 from maabase.state_model import BaseContext, _average_empty_order_slots
 from maabase.optimizer import _metrics, optimize
-from maabase.scheduler import build_rotation
+from maabase.scheduler import _morale_rates, _team_duration, build_rotation
+from maabase.valuation import EXP_VALUE, GOLD_VALUE, LMD_VALUE
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +58,30 @@ class CoreTests(unittest.TestCase):
         self.assertAlmostEqual(trade["expected_minutes"], 203.4)
         self.assertAlmostEqual(trade["lmd_per_day"] / 1.03, 15929.20354, places=4)
         self.assertAlmostEqual(trade["gold_per_day"] / 1.03, 31.858407, places=4)
+
+    def test_trade_reference_table_matches_biohazard(self):
+        cases = {
+            "base": (set(), 10265.486725663717, 20.530973451327434),
+            "tailor_alpha": ({"bskill_tra_wt&cost1"}, 10355.32994923858, 20.710659898477157),
+            "tailor_beta": ({"bskill_tra_wt&cost2"}, 10410.95890410959, 20.82191780821918),
+            "proviso": ({"bskill_tra_law", "bskill_tra_against2"}, 15929.20353982301, 31.858407079646017),
+            "tequila": ({"bskill_tra_long2"}, 10973.451327433628, 20.530973451327434),
+            "proviso_tequila": ({"bskill_tra_law", "bskill_tra_against2", "bskill_tra_long2"}, 16637.16814159292, 31.858407079646017),
+            "tequila_alpha": ({"bskill_tra_long2", "bskill_tra_wt&cost1"}, 12030.456852791878, 20.710659898477157),
+            "tequila_beta": ({"bskill_tra_long2", "bskill_tra_wt&cost2"}, 12739.72602739726, 20.82191780821918),
+            "all_alpha": ({"bskill_tra_law", "bskill_tra_against2", "bskill_tra_long2", "bskill_tra_wt&cost1"}, 14771.573604060914, 26.19289340101523),
+            "all_beta": ({"bskill_tra_law", "bskill_tra_against2", "bskill_tra_long2", "bskill_tra_wt&cost2"}, 13561.643835616438, 22.465753424657535),
+        }
+        for label, (icons, expected_lmd, expected_gold) in cases.items():
+            team = [{"icons": icons}] if icons else []
+            economy = _trade_economics(team, -len(team))
+            with self.subTest(label=label):
+                self.assertAlmostEqual(economy["lmd_per_day"], expected_lmd, places=8)
+                self.assertAlmostEqual(economy["gold_per_day"], expected_gold, places=8)
+
+    def test_yituliu_default_money_exp_value_ratio(self):
+        self.assertAlmostEqual(LMD_VALUE / EXP_VALUE, 229 / 145)
+        self.assertAlmostEqual(GOLD_VALUE, EXP_VALUE * 400)
 
     def test_shamare_proviso_tequila_special_order_priority(self):
         team = [
@@ -105,6 +130,20 @@ class CoreTests(unittest.TestCase):
         profile = result["time_profiles"][0]
         self.assertEqual(profile["phases"][0]["value_percent"], 20)
         self.assertEqual(profile["phases"][-1]["value_percent"], 25)
+
+    def test_social_trade_team_extends_to_collection_boundary(self):
+        roster = [
+            {"id": "char_196_sunbr", "elite": 2, "level": 90},
+            {"id": "char_283_midn", "elite": 2, "level": 90},
+            {"id": "char_282_catap", "elite": 2, "level": 90},
+        ]
+        operators = prepare_operators(roster, self.catalog)
+        candidate = evaluate_team(operators, "trade", self.catalog, BaseContext(shift_hours=32))
+        room = {"key": "trade", "operators": candidate["operators"], "details": candidate["details"]}
+        self.assertEqual(set(_morale_rates(room).values()), {0.65})
+        team = {"rooms": [room], "support_rooms": []}
+        self.assertEqual(_team_duration(team, 4, 1, 36), 32)
+        self.assertEqual(_team_duration(team, 8, 1, 36), 32)
 
     def test_orundum_order_has_fixed_two_shard_exchange(self):
         result = _orundum_economics([{"icons": set()}, {"icons": set()}, {"icons": set()}], 0)
@@ -181,6 +220,18 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(metrics["gold_production_net_per_day"], -30)
         self.assertEqual(metrics["gold_net_per_day"], -25)
         self.assertEqual(metrics["gold_inventory_days"], 4)
+
+    def test_drone_acceleration_is_exposed_as_resource_delta(self):
+        selected = {
+            "trade": [{"multiplier": 1.0, "trade": {"lmd_per_day": 15000, "gold_per_day": 30}, "names": ["测试贸易站"]}],
+            "gold": [], "exp": [],
+            "power": [{"multiplier": 1.21, "efficiency": 20, "names": ["测试发电站"]}],
+        }
+        metrics = _metrics(selected, self.catalog, "trade")
+        self.assertEqual(metrics["drones_per_day"], 300)
+        self.assertEqual(metrics["drone_effect"]["equivalent_hours"], 15)
+        self.assertEqual(metrics["drone_effect"]["lmd_per_day"], 9375)
+        self.assertEqual(metrics["lmd_per_day"], 24375)
 
     def test_power_station_speed_changes_drone_multiplier(self):
         team = prepare_operators(

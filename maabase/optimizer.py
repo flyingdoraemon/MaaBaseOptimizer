@@ -10,6 +10,7 @@ from typing import Any
 from .model import generate_candidates, prepare_operators
 from .morale import analyze_morale, choose_dorm_helper
 from .scheduler import build_rotation
+from .valuation import candidate_daily_value, public_valuation
 from .state_model import (
     ABYSSAL_HUNTER_IDS,
     MONSTER_HUNTER_IDS,
@@ -26,13 +27,17 @@ class GroupSpec:
     count: int
 
 
-def _utility(candidate: dict, product: str, lmd_weight: float, gold_safety: float) -> float:
-    multiplier = candidate["multiplier"]
+def _utility(candidate: dict, product: str, objective_mode: str) -> float:
+    if objective_mode == "sanity_value":
+        return candidate_daily_value(candidate, product)
+    # The layout itself expresses demand in the default mode: each requested
+    # room contributes a normalized production score, so one EXP room remains
+    # one EXP room and is not silently sacrificed to an external value ratio.
+    multiplier = float(candidate.get("multiplier", 0) or 0)
     if product == "trade":
-        trade = candidate.get("trade") or {}
-        return float(trade.get("lmd_per_day", 0)) / 10000.0
+        return float((candidate.get("trade") or {}).get("lmd_per_day", 0) or 0) / 10_265.4867256637
     if product == "orundum":
-        return float((candidate.get("orundum") or {}).get("orundum_per_day", 0)) / 240.0
+        return float((candidate.get("orundum") or {}).get("orundum_per_day", 0) or 0) / 240.0
     if product in {"exp", "gold", "shard"}:
         return multiplier
     if product == "power":
@@ -41,7 +46,7 @@ def _utility(candidate: dict, product: str, lmd_weight: float, gold_safety: floa
 
 
 def _solve_pulp(
-    candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float,
+    candidates: dict[str, list[dict]], groups: list[GroupSpec], objective_mode: str,
     reusable_ids: set[str] | None = None,
 ) -> tuple[dict, str] | None:
     try:
@@ -72,7 +77,7 @@ def _solve_pulp(
             for i, candidate in enumerate(candidates[group.key])
         ) <= 1
     problem += pulp.lpSum(
-        _utility(candidate, group.key, lmd_weight, gold_safety) * variables[(group.key, i)]
+        _utility(candidate, group.key, objective_mode) * variables[(group.key, i)]
         for group in groups
         for i, candidate in enumerate(candidates[group.key])
     )
@@ -89,7 +94,7 @@ def _solve_pulp(
 
 
 def _solve_beam(
-    candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float,
+    candidates: dict[str, list[dict]], groups: list[GroupSpec], objective_mode: str,
     width: int = 4000, reusable_ids: set[str] | None = None,
 ) -> tuple[dict, str]:
     # score, used operators, selected by product
@@ -107,7 +112,7 @@ def _solve_beam(
                         continue
                     new_selected = {key: list(value) for key, value in selected.items()}
                     new_selected.setdefault(group.key, []).append(candidate)
-                    item = (score + _utility(candidate, group.key, lmd_weight, gold_safety), next(counter), used | op_set, new_selected)
+                    item = (score + _utility(candidate, group.key, objective_mode), next(counter), used | op_set, new_selected)
                     if len(heap) < width * 2:
                         heapq.heappush(heap, item)
                     elif item[0] > heap[0][0]:
@@ -129,13 +134,13 @@ def _solve_beam(
 
 
 def _solve(
-    candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float,
+    candidates: dict[str, list[dict]], groups: list[GroupSpec], objective_mode: str,
     reusable_ids: set[str] | None = None,
 ) -> tuple[dict, str]:
-    exact = _solve_pulp(candidates, groups, lmd_weight, gold_safety, reusable_ids)
+    exact = _solve_pulp(candidates, groups, objective_mode, reusable_ids)
     if exact:
         return exact
-    return _solve_beam(candidates, groups, lmd_weight, gold_safety, reusable_ids=reusable_ids)
+    return _solve_beam(candidates, groups, objective_mode, reusable_ids=reusable_ids)
 
 
 def _metrics(
@@ -158,6 +163,15 @@ def _metrics(
     shards_made = sum(24.0 * c["multiplier"] for c in shard)
     shards_used = sum(float((c.get("orundum") or {}).get("shards_per_day", 24.0 * c["multiplier"])) for c in orundum_trade)
     orundum = sum(float((c.get("orundum") or {}).get("orundum_per_day", 240.0 * c["multiplier"])) for c in orundum_trade)
+    before_drones = {
+        "lmd_per_day": lmd,
+        "exp_per_day": experience,
+        "gold_made_per_day": gold_made,
+        "gold_used_per_day": gold_used,
+        "shards_made_per_day": shards_made,
+        "shards_used_per_day": shards_used,
+        "orundum_per_day": orundum,
+    }
     shard_lmd_cost = shards_made * (1600.0 if shard_recipe == "rock" else 1000.0)
     shard_material_used = shards_made * (2.0 if shard_recipe == "rock" else 1.0)
     power_bonus = sum(5.0 + c["efficiency"] for c in power)
@@ -193,6 +207,18 @@ def _metrics(
         drone_note = f"源石订单：{' / '.join(target['names'])}"
     production_net = gold_made - gold_used
     total_net = production_net + external_gold_per_day
+    drone_effect = {
+        "target_kind": drone_target,
+        "target": drone_note,
+        "equivalent_hours": round(drone_hours, 3),
+        "lmd_per_day": round(lmd - before_drones["lmd_per_day"], 3),
+        "exp_per_day": round(experience - before_drones["exp_per_day"], 3),
+        "gold_made_per_day": round(gold_made - before_drones["gold_made_per_day"], 3),
+        "gold_used_per_day": round(gold_used - before_drones["gold_used_per_day"], 3),
+        "shards_made_per_day": round(shards_made - before_drones["shards_made_per_day"], 3),
+        "shards_used_per_day": round(shards_used - before_drones["shards_used_per_day"], 3),
+        "orundum_per_day": round(orundum - before_drones["orundum_per_day"], 3),
+    }
     return {
         "lmd_per_day": round(lmd),
         "lmd_shard_cost_per_day": round(shard_lmd_cost),
@@ -217,6 +243,7 @@ def _metrics(
         "drones_per_day": round(drones, 1),
         "drone_hours_per_day": round(drone_hours, 2),
         "drone_target": drone_note,
+        "drone_effect": drone_effect,
         "power_bonus": round(power_bonus, 2),
     }
 
@@ -452,8 +479,9 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     orundum_count = max(0, min(trade_count, int(payload.get("orundum_trades", 0))))
     lmd_trade_count = trade_count - orundum_count
     drone_target = payload.get("drone_target", "trade")
-    lmd_weight = 0.5
-    gold_safety = 0.0
+    objective_mode = str(payload.get("objective_mode", "layout_output"))
+    if objective_mode not in {"layout_output", "sanity_value"}:
+        raise ValueError("排班目标必须是按布局产出或等效理智价值")
     shard_recipe = "device" if payload.get("shard_recipe") == "device" else "rock"
     keep = max(120, min(600, int(payload.get("candidate_limit", 320))))
     groups = [GroupSpec("trade", lmd_trade_count), GroupSpec("orundum", orundum_count),
@@ -520,7 +548,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 if len(candidates_option[group.key]) < group.count:
                     raise ValueError(f"{group.key} 的候选组合不足")
             selected_option, solver_option = _solve(
-                candidates_option, groups, lmd_weight, gold_safety, reusable_ids
+                candidates_option, groups, objective_mode, reusable_ids
             )
             count = platform_count(selected_option.get("power", []))
             factory_rooms = selected_option.get("gold", []) + selected_option.get("exp", []) + selected_option.get("shard", [])
@@ -542,7 +570,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
             if abyssal_count:
                 context_option.audit.append(f"制造站：深海猎人 {abyssal_count} 名")
         score = sum(
-            _utility(candidate, group.key, lmd_weight, gold_safety)
+            _utility(candidate, group.key, objective_mode)
             for group in groups for candidate in selected_option.get(group.key, [])
         )
         plan = (score, control_team_option, context_option, selected_option, solver_option, candidates_option)
@@ -576,7 +604,13 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
         "layout": {"name": layout_key, "trade": trade_count, "lmd_trade": lmd_trade_count,
                    "orundum_trade": orundum_count, "factory": factory_count, "gold": gold_count,
                    "exp": exp_count, "shard": shard_count, "power": power_count},
+        "objective": {
+            "mode": objective_mode,
+            "label": "一图流等效理智价值" if objective_mode == "sanity_value" else "按用户选定布局分别最大化产出",
+            "hard_constraints": f"{lmd_trade_count} 龙门贸易站 / {orundum_count} 源石贸易站 / {gold_count} 赤金站 / {exp_count} 经验站 / {shard_count} 碎片站",
+        },
         "metrics": metrics,
+        "valuation": public_valuation(),
         "rooms": _room_rows(selected),
         "support_rooms": ([control_row] if control_row else []) + auxiliary_rows,
         "base_state": context.public(),

@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 CATALOG = json.loads((ROOT / "data" / "catalog.json").read_text(encoding="utf-8"))
 ROSTER_PATH = ROOT / "data" / "user_roster.json"
+APP_REVISION = "2026.08.16-demand-v3"
 SCAN_SESSIONS: dict[str, dict] = {}
 SCAN_LOCK = threading.Lock()
 
@@ -61,6 +62,8 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(value, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-MaaBaseOptimizer-Revision", APP_REVISION)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -80,7 +83,12 @@ class Handler(BaseHTTPRequestHandler):
                 for op_id, op in CATALOG["operators"].items()
             ]
             operators.sort(key=lambda x: (-x["rarity"], x["name"]))
-            self._json(200, {"operators": operators, "count": len(operators), "schema": CATALOG["schema"]})
+            self._json(200, {
+                "operators": operators,
+                "count": len(operators),
+                "schema": CATALOG["schema"],
+                "app_revision": APP_REVISION,
+            })
             return
         if path == "/api/roster":
             roster = load_roster(ROSTER_PATH, CATALOG)
@@ -114,6 +122,8 @@ class Handler(BaseHTTPRequestHandler):
         body = file.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", mimetypes.guess_type(file.name)[0] or "application/octet-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-MaaBaseOptimizer-Revision", APP_REVISION)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

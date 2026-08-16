@@ -86,6 +86,13 @@
             <option value="none">不计入</option>
           </select>
         </label>
+        <label><span>候选组合目标</span>
+          <select id="objectiveMode">
+            <option value="layout_output">按选定房间布局分别最大化</option>
+            <option value="sanity_value">一图流等效理智价值</option>
+          </select>
+          <small>房间数量与产品始终是硬约束；等效价值只改变干员竞争时的取舍</small>
+        </label>
         <label><span>轮班策略</span>
           <select id="scheduleMode"><option value="morale_aware">心情阈值 + 收取节点</option><option value="fixed">固定时长（对照）</option></select>
         </label>
@@ -164,6 +171,10 @@
           <article class="panel side-card gold-monitor-card">
             <div class="side-title"><span class="side-icon gold-icon">Au</span><div><small>INVENTORY FLOW</small><h3>赤金库存</h3></div></div>
             <div id="goldMonitor"></div>
+          </article>
+          <article class="panel side-card">
+            <div class="side-title"><span class="side-icon drone-icon">⚡</span><div><small>DRONE ROUTING</small><h3>无人机加速贡献</h3></div></div>
+            <div id="droneMonitor"></div>
           </article>
           <article class="panel side-card">
             <div class="side-title"><span class="side-icon state-icon">⇄</span><div><small>CROSS-ROOM BUS</small><h3>跨房间状态</h3></div></div>

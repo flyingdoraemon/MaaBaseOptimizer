@@ -196,6 +196,7 @@ $("optimizeButton").addEventListener("click", async () => {
     orundum_trades: +$("orundumTrades").value,
     shard_recipe: $("shardRecipe").value,
     drone_target: $("droneTarget").value,
+    objective_mode: $("objectiveMode").value,
     schedule_mode: $("scheduleMode").value,
     lock_dorm_helper: $("lockDormHelper").checked,
     enable_fiammetta: $("enableFiammetta").checked,
@@ -230,24 +231,31 @@ function renderResults(data) {
   $("droneKpiNote").textContent = `发电站 +${m.power_bonus}% · 等效 ${m.drone_hours_per_day} 小时`;
   renderProductionMonitor(m);
   renderGoldMonitor(m);
+  renderDroneMonitor(m);
   renderCrossRoomFlows(data.cross_room_flows || []);
   renderBars(m);
   renderRotation(data.rotation);
   renderYieldCurve(data.rotation?.production_curve);
   const audit=data.search_audit;
-  const searchWarning=audit ? `求解范围：${audit.claim}。${audit.candidate_operator_pool}；每类房间目标保留 ${audit.candidate_retain_target_per_room_type} 个组合；阶段技能分别按 A ${audit.modeled_shift_hours}h / B ${audit.modeled_shift_hours_b || audit.modeled_shift_hours}h 积分${audit.duration_refinements?`（经 ${audit.duration_refinements} 次时长回代）`:""}；${audit.rotation_strategy}。` : "";
+  const valuation=data.valuation, objective=data.objective;
+  const searchWarning=audit ? `求解范围：${audit.claim}。${audit.candidate_operator_pool}；每类房间目标保留 ${audit.candidate_retain_target_per_room_type} 个组合；阶段技能分别按 A ${audit.modeled_shift_hours}h / B ${audit.modeled_shift_hours_b || audit.modeled_shift_hours}h 积分${audit.duration_refinements?`（经 ${audit.duration_refinements} 次时长回代）`:""}；${audit.rotation_strategy}。目标：${objective?.label || "按布局产出"}；硬约束：${objective?.hard_constraints || "使用页面布局"}${objective?.mode === "sanity_value" && valuation ? `；${valuation.note}` : ""}。` : "";
   $("warnings").innerHTML = [searchWarning,...data.warnings].filter(Boolean).map(x => `<div class="warning">${escapeHtml(x)}</div>`).join("");
   renderMorale(data.morale, data.rotation);
   const teams = data.rotation?.teams || {A:{support_rooms:data.support_rooms||[],rooms:data.rooms}};
   const workHours=data.rotation?.team_work_hours||{};
-  $("rooms").innerHTML = Object.entries(teams).map(([team,plan])=>`<section class="team-room-group"><div class="team-room-title"><strong>${team} 队</strong><span>${workHours[team] ? `每循环工作 ${workHours[team]} 小时` : "单班方案"}</span></div><div class="rooms">${[...(plan.support_rooms||[]),...(plan.rooms||[])].map(room => `
+  $("rooms").innerHTML = Object.entries(teams).map(([team,plan])=>`<section class="team-room-group"><div class="team-room-title"><strong>${team} 队</strong><span>${workHours[team] ? `每循环工作 ${workHours[team]} 小时` : "单班方案"}</span></div><div class="rooms">${[...(plan.support_rooms||[]),...(plan.rooms||[])].map(room => {
+    const event=(data.rotation?.rooms||[]).find(row=>row.room===room.room)?.events?.find(item=>item.team===team);
+    const rates=event ? Object.values(event.morale_rates||{}).map(Number) : [];
+    const rateRange=rates.length ? `${Math.min(...rates)}${Math.max(...rates)!==Math.min(...rates)?`–${Math.max(...rates)}`:""}` : "—";
+    return `
     <article class="room">
       <div class="room-head"><h3>${escapeHtml(room.room)}</h3><span class="eff">+${room.efficiency}%</span></div>
       <div class="names">${room.names.map(escapeHtml).join(" · ")}</div>
       <div class="skills">${room.details.map(d => `${escapeHtml(d.operator)}：${d.skills.map(s => escapeHtml(s.name)).join(" / ") || "无对应技能"}`).join("<br>")}</div>
       ${(room.mechanic_notes || []).length ? `<div class="skills">机制：${room.mechanic_notes.map(escapeHtml).join("；")}</div>` : ""}
+      ${event ? `<div class="endurance"><span>实际在岗 ${event.scheduled_work_hours}h</span><span>本组合安全上限 ${event.safe_work_hours}h</span><span>心情消耗 ${rateRange}/h</span></div>` : ""}
       ${room.group ? `<span class="confidence">${escapeHtml(room.group)} · MAA 组合候选</span>` : `<span class="confidence">${room.confidence === "direct" ? "直接数值模型" : room.confidence === "state_model" ? "跨设施状态模型" : "保守估算"}</span>`}
-    </article>`).join("")}</div></section>`).join("");
+    </article>`}).join("")}</div></section>`).join("");
   runQuickSimulation(data);
   $("results").scrollIntoView({behavior:"smooth", block:"start"});
 }
@@ -287,6 +295,23 @@ function renderGoldMonitor(m) {
     <div class="net-flow ${net < 0 ? "draining" : "growing"}"><span>库存速度</span><strong>${signed(net)} / 日</strong><small>${forecast}</small></div>
     <div class="stock-line"><span>当前库存</span><strong>${number(m.gold_inventory || 0)} 根</strong></div>
     <p class="side-note">站内制造净流量 ${signed(m.gold_production_net_per_day)} / 日。赤金仅作为贸易中间品，负数本身不是低效。</p>`;
+}
+
+function renderDroneMonitor(m) {
+  const effect=m.drone_effect||{};
+  const contributions=[
+    ["龙门币",effect.lmd_per_day], ["作战经验",effect.exp_per_day],
+    ["赤金制造",effect.gold_made_per_day], ["赤金消耗",effect.gold_used_per_day],
+    ["合成玉",effect.orundum_per_day], ["碎片制造",effect.shards_made_per_day],
+  ].filter(([,value])=>Math.abs(+value||0)>1e-6);
+  $("droneMonitor").innerHTML=`<div class="flow-ledger">
+    <div><span>基础恢复</span><strong>240 架 / 日</strong></div>
+    <div><span>发电站增幅</span><strong class="positive">+${m.power_bonus}%</strong></div>
+    <div><span>实际可用</span><strong>${m.drones_per_day} 架 / 日</strong></div>
+    <div><span>等效加速</span><strong>${effect.equivalent_hours ?? m.drone_hours_per_day} 小时 / 日</strong></div>
+  </div><div class="drone-target"><span>投向</span><strong>${escapeHtml(effect.target||m.drone_target||"未使用")}</strong></div>
+  <div class="drone-deltas">${contributions.map(([label,value])=>`<p><span>${label}</span><strong>${signed(value,3)} / 日</strong></p>`).join("")||'<p><span>当前设置不把无人机计入产出</span></p>'}</div>
+  <p class="side-note">以上增量已同时进入解析期望、24 小时折线与快进模拟，不是单独展示的附加数字。</p>`;
 }
 
 function renderCrossRoomFlows(flows) {
@@ -330,7 +355,7 @@ function renderRotation(rotation) {
       const left=event.start/rotation.cycle_hours*100, width=(event.end-event.start)/rotation.cycle_hours*100;
       const skills=(event.details||[]).map(d=>`${d.operator}：${(d.skills||[]).map(s=>s.name).join("/")||"无对应技能"}`).join("；");
       const phases=(event.time_profiles||[]).map(p=>`${p.operator} ${p.label} 班均+${p.average_percent}%`).join("；");
-      const title=`${hourLabel(event.start)}–${hourLabel(event.end)} · ${event.team} 班 · 效率 +${event.efficiency}% · 最低结束心情 ${event.morale_min_end} · ${event.names.join(" / ")}${skills?` · ${skills}`:""}${phases?` · ${phases}`:""}`;
+      const title=`${hourLabel(event.start)}–${hourLabel(event.end)} · ${event.team} 班 · 实际 ${event.scheduled_work_hours}h / 本组合安全上限 ${event.safe_work_hours}h · 效率 +${event.efficiency}% · 最低结束心情 ${event.morale_min_end} · ${event.names.join(" / ")}${skills?` · ${skills}`:""}${phases?` · ${phases}`:""}`;
       return `<i class="timeline-event room-event work-${event.team.toLowerCase()}" style="left:${left}%;width:${width}%" title="${escapeHtml(title)}"><span class="room-team">${event.team}</span><span class="operator-chips">${event.names.map(name=>`<b>${escapeHtml(name)}</b>`).join("")}</span></i>`;
     }).join("")}</div>
   </div>`).join("");
