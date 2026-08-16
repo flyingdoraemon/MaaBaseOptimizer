@@ -13,11 +13,12 @@
       <h1>基建排班实验室</h1>
       <p class="lead">用你的干员练度做跨设施排班，并把龙门币、经验与赤金收支摆在同一张图上。</p>
     </div>
-    <div class="status"><span class="dot"></span><span id="catalogStatus">载入技能数据…</span></div>
+    <div class="hero-actions"><button id="themeToggle" class="theme-toggle" type="button" aria-label="切换明暗主题">☀︎ 浅色</button><div class="status"><span class="dot"></span><span id="catalogStatus">载入技能数据…</span></div></div>
   </header>
 
   <main>
-    <section class="panel setup compact-setup">
+    <nav class="workflow-nav" aria-label="工作流程"><a href="#boxSetup"><b>1</b>Box</a><a href="#productionSetup"><b>2</b>设施与策略</a><a href="#results"><b>3</b>排班与产出</a><a href="#simulation"><b>4</b>随机验证</a></nav>
+    <section id="boxSetup" class="panel setup compact-setup">
       <div class="section-title">
         <div><span class="step">01</span><h2>干员 Box</h2></div>
         <p>这里只维护技能解锁阶段；等级不参与基建排班展示。</p>
@@ -59,7 +60,7 @@
       <button id="retrySklandButton" class="quiet hidden">重新生成二维码</button>
     </dialog>
 
-    <section class="panel controls">
+    <section id="productionSetup" class="panel controls">
       <div class="section-title">
         <div><span class="step">02</span><h2>生产目标</h2></div>
         <p>先选择真实房间布局，再指定制造与贸易产品；程序生成两队循环排班。</p>
@@ -78,6 +79,7 @@
         <label><span>源石碎片配方</span><select id="shardRecipe"><option value="rock">固源岩：2 个 + 1600 龙门币</option><option value="device">装置：1 个 + 1000 龙门币</option></select></label>
         <label><span>无人机用途</span>
           <select id="droneTarget">
+            <option value="auto_balance">自动分流：动态平衡赤金与贸易</option>
             <option value="trade">贸易站订单</option>
             <option value="gold">赤金制造</option>
             <option value="exp">作战记录制造</option>
@@ -85,6 +87,11 @@
             <option value="orundum">源石订单</option>
             <option value="none">不计入</option>
           </select>
+          <small>按当班供需速度与每架无人机边际产出自动寻找瓶颈，可同时分给赤金制造和贸易订单</small>
+        </label>
+        <label><span>允许的赤金库存净变化 / 日</span>
+          <input id="goldNetTarget" type="number" min="-999" max="999" step="1" value="-20">
+          <small>例如 −20：允许用签到、活动、信用商店或库存每天补贴 20 根；不是制造站产量下限</small>
         </label>
         <label><span>候选组合目标</span>
           <select id="objectiveMode">
@@ -186,7 +193,7 @@
           </article>
         </aside>
       </div>
-      <article class="panel simulator-panel">
+      <article id="simulation" class="panel simulator-panel">
         <div class="section-title"><div><span class="step">04</span><h2>快进验证</h2></div><p>逐笔生成贸易订单，检查长期模拟是否收敛到解析期望。</p></div>
         <div class="sim-controls">
           <label><span>快进天数</span><input id="simDays" type="number" min="1" max="365" value="30"></label>

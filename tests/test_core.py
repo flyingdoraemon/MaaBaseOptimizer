@@ -11,6 +11,7 @@ from maabase.morale import analyze_morale
 from maabase.state_model import BaseContext, _average_empty_order_slots
 from maabase.optimizer import _metrics, optimize
 from maabase.scheduler import _morale_rates, _team_duration, build_rotation
+from maabase.simulator import simulate
 from maabase.valuation import EXP_VALUE, GOLD_VALUE, LMD_VALUE
 
 
@@ -232,6 +233,86 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(metrics["drone_effect"]["equivalent_hours"], 15)
         self.assertEqual(metrics["drone_effect"]["lmd_per_day"], 9375)
         self.assertEqual(metrics["lmd_per_day"], 24375)
+
+    def test_auto_drone_routing_meets_user_inventory_target_with_two_targets(self):
+        selected = {
+            "trade": [{"operators": ["trade"], "multiplier": 1.0,
+                       "trade": {"lmd_per_day": 15000, "gold_per_day": 30}, "names": ["贸易"]}],
+            "gold": [{"operators": ["gold"], "multiplier": 1.0, "names": ["赤金"]}],
+            "exp": [], "power": [],
+        }
+        metrics = _metrics(selected, self.catalog, "auto_balance", gold_net_target_per_day=-20)
+        allocations = {item["kind"]: item["drones_per_day"] for item in metrics["drone_effect"]["allocations"]}
+        self.assertAlmostEqual(allocations["gold"], 48)
+        self.assertAlmostEqual(allocations["trade"], 192)
+        self.assertAlmostEqual(metrics["gold_net_per_day"], -20)
+        self.assertTrue(metrics["drone_effect"]["balance"]["reachable"])
+        self.assertTrue(metrics["drone_effect"]["balance"]["binding"])
+        looser = _metrics(selected, self.catalog, "auto_balance", gold_net_target_per_day=-22)
+        self.assertGreater(looser["lmd_per_day"], metrics["lmd_per_day"])
+        self.assertLess(looser["drone_effect"]["allocations"][0]["drones_per_day"], allocations["gold"])
+
+    def test_looser_gold_target_plateaus_after_all_drones_reach_trade(self):
+        selected = {
+            "trade": [{"operators": ["trade"], "multiplier": 1.0,
+                       "trade": {"lmd_per_day": 15000, "gold_per_day": 30}, "names": ["贸易"]}],
+            "gold": [{"operators": ["gold"], "multiplier": 1.0, "names": ["赤金"]}],
+            "exp": [], "power": [],
+        }
+        minus_30 = _metrics(selected, self.catalog, "auto_balance", gold_net_target_per_day=-30)
+        minus_35 = _metrics(selected, self.catalog, "auto_balance", gold_net_target_per_day=-35)
+        self.assertEqual(minus_30["lmd_per_day"], minus_35["lmd_per_day"])
+        self.assertEqual(minus_30["drone_effect"]["balance"]["regime"], "trade_saturated")
+        self.assertFalse(minus_30["drone_effect"]["balance"]["binding"])
+
+    def test_drone_bank_is_spent_at_collection_nodes(self):
+        selected = {
+            "trade": [{"operators": ["trade"], "multiplier": 1.0,
+                       "trade": {"lmd_per_day": 15000, "gold_per_day": 30}, "names": ["贸易"]}],
+            "gold": [{"operators": ["gold"], "multiplier": 1.0, "names": ["赤金"]}],
+            "exp": [], "power": [],
+        }
+        metrics = _metrics(selected, self.catalog, "auto_balance", gold_net_target_per_day=-20)
+        room_trade = {"key": "trade", "room": "龙门贸易站 1", **selected["trade"][0],
+                      "details": [], "efficiency": 0, "time_profiles": []}
+        room_gold = {"key": "gold", "room": "赤金制造站 1", **selected["gold"][0],
+                     "details": [], "efficiency": 0, "time_profiles": []}
+        team = {"rooms": [room_trade, room_gold], "support_rooms": [], "metrics": metrics}
+        rotation = build_rotation(team, team, 12, collection_interval_hours=8)
+        curve = rotation["production_curve"]
+        self.assertEqual([event["minute"] for event in curve["drone_events"]], [480, 960, 1440])
+        before = next(point for point in curve["points"] if point["minute"] == 465)
+        at_node = next(point for point in curve["points"] if point["minute"] == 480)
+        normal_quarter_hour = 15000 / 24 / 4
+        self.assertGreater(at_node["cumulative"]["lmd_per_day"] - before["cumulative"]["lmd_per_day"], normal_quarter_hour)
+        self.assertGreater(before["cumulative"]["drones_per_day"], 0)
+        self.assertAlmostEqual(at_node["cumulative"]["drones_per_day"], 0)
+
+    def test_unused_drone_inventory_is_not_cleared_and_respects_capacity(self):
+        metrics = _metrics({"trade": [], "gold": [], "exp": [], "power": []}, self.catalog, "none")
+        team = {"rooms": [], "support_rooms": [], "metrics": metrics}
+        curve = build_rotation(team, team, 12, collection_interval_hours=8)["production_curve"]
+        self.assertEqual(curve["drone_events"][0]["drones_spent"], 0)
+        self.assertEqual(curve["points"][-1]["cumulative"]["drones_per_day"], 235)
+
+    def test_long_collection_interval_caps_analytic_drone_usage(self):
+        selected = {
+            "trade": [{"operators": ["trade"], "multiplier": 1.0,
+                       "trade": {"lmd_per_day": 15000, "gold_per_day": 30}, "names": ["贸易"]}],
+            "gold": [], "exp": [],
+            "power": [{"operators": ["power"], "multiplier": 1.21, "efficiency": 20, "names": ["发电"]}],
+        }
+        metrics = _metrics(selected, self.catalog, "trade", collection_interval_hours=24)
+        self.assertEqual(metrics["drones_recovery_potential_per_day"], 300)
+        self.assertEqual(metrics["drones_per_day"], 235)
+        self.assertEqual(metrics["drone_overflow_lost_per_day"], 65)
+        self.assertAlmostEqual(metrics["drone_effect"]["lmd_per_day"], 7343.75)
+
+    def test_simulator_generates_a_new_seed_when_unspecified(self):
+        payload = {"rooms": [], "metrics": {}, "days": 1, "trials": 100}
+        first = simulate(payload)
+        second = simulate(payload)
+        self.assertNotEqual(first["seed"], second["seed"])
 
     def test_power_station_speed_changes_drone_multiplier(self):
         team = prepare_operators(

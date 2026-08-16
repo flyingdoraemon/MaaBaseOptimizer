@@ -1,6 +1,14 @@
 const state = { catalog: [], byName: new Map(), roster: [], scanId: null, scanPoll: null, lastResult: null, quickSimSequence: 0 };
 const $ = (id) => document.getElementById(id);
 
+function setTheme(theme) {
+  document.documentElement.dataset.theme=theme;
+  localStorage.setItem("maaBaseTheme",theme);
+  $("themeToggle").textContent=theme==="light" ? "◐ 深色" : "☀︎ 浅色";
+}
+setTheme(localStorage.getItem("maaBaseTheme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+$("themeToggle").addEventListener("click",()=>setTheme(document.documentElement.dataset.theme==="light" ? "dark" : "light"));
+
 async function request(path, options = {}) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -196,6 +204,7 @@ $("optimizeButton").addEventListener("click", async () => {
     orundum_trades: +$("orundumTrades").value,
     shard_recipe: $("shardRecipe").value,
     drone_target: $("droneTarget").value,
+    gold_net_target_per_day: +$("goldNetTarget").value || 0,
     objective_mode: $("objectiveMode").value,
     schedule_mode: $("scheduleMode").value,
     lock_dorm_helper: $("lockDormHelper").checked,
@@ -238,8 +247,10 @@ function renderResults(data) {
   renderYieldCurve(data.rotation?.production_curve);
   const audit=data.search_audit;
   const valuation=data.valuation, objective=data.objective;
+  const comparison=objective?.comparison;
+  const objectiveAudit=comparison ? (comparison.same_semantic_assignment && comparison.same_work_durations!==false ? `目标交叉审计：在${comparison.scope}内，“${objective.label}”和“${comparison.alternate_label}”收敛到相同的实质房间组合与工时（已忽略同类房间编号互换）；这是本 Box 的求解结果，不代表两套公式相同。` : `目标交叉审计：“${objective.label}”与“${comparison.alternate_label}”在完整 A/B 组合或工时上存在差异；备选方案龙门币 ${comparison.alternate_metrics.lmd_per_day}/日、经验 ${comparison.alternate_metrics.exp_per_day}/日、赤金净流 ${signed(comparison.alternate_metrics.gold_net_per_day)}/日${comparison.alternate_work_durations?`，工时 A ${comparison.alternate_work_durations.A}h / B ${comparison.alternate_work_durations.B}h`:""}。`) : "";
   const searchWarning=audit ? `求解范围：${audit.claim}。${audit.candidate_operator_pool}；每类房间目标保留 ${audit.candidate_retain_target_per_room_type} 个组合；阶段技能分别按 A ${audit.modeled_shift_hours}h / B ${audit.modeled_shift_hours_b || audit.modeled_shift_hours}h 积分${audit.duration_refinements?`（经 ${audit.duration_refinements} 次时长回代）`:""}；${audit.rotation_strategy}。目标：${objective?.label || "按布局产出"}；硬约束：${objective?.hard_constraints || "使用页面布局"}${objective?.mode === "sanity_value" && valuation ? `；${valuation.note}` : ""}。` : "";
-  $("warnings").innerHTML = [searchWarning,...data.warnings].filter(Boolean).map(x => `<div class="warning">${escapeHtml(x)}</div>`).join("");
+  $("warnings").innerHTML = [objectiveAudit,searchWarning,...data.warnings].filter(Boolean).map(x => `<div class="warning">${escapeHtml(x)}</div>`).join("");
   renderMorale(data.morale, data.rotation);
   const teams = data.rotation?.teams || {A:{support_rooms:data.support_rooms||[],rooms:data.rooms}};
   const workHours=data.rotation?.team_work_hours||{};
@@ -299,6 +310,7 @@ function renderGoldMonitor(m) {
 
 function renderDroneMonitor(m) {
   const effect=m.drone_effect||{};
+  const allocations=(effect.allocations||[]).filter(item=>(+item.drones_per_day||0)>0.001);
   const contributions=[
     ["龙门币",effect.lmd_per_day], ["作战经验",effect.exp_per_day],
     ["赤金制造",effect.gold_made_per_day], ["赤金消耗",effect.gold_used_per_day],
@@ -307,11 +319,15 @@ function renderDroneMonitor(m) {
   $("droneMonitor").innerHTML=`<div class="flow-ledger">
     <div><span>基础恢复</span><strong>240 架 / 日</strong></div>
     <div><span>发电站增幅</span><strong class="positive">+${m.power_bonus}%</strong></div>
-    <div><span>实际可用</span><strong>${m.drones_per_day} 架 / 日</strong></div>
+    <div><span>理论恢复能力</span><strong>${m.drones_recovery_potential_per_day ?? m.drones_per_day} 架 / 日</strong></div>
+    <div><span>实际可用于加速</span><strong>${m.drones_per_day} 架 / 日</strong></div>
+    <div><span>${m.drone_capacity || 235} 架容量溢出</span><strong class="${(+m.drone_overflow_lost_per_day||0)>0?"negative":"positive"}">${m.drone_overflow_lost_per_day || 0} 架 / 日</strong></div>
     <div><span>等效加速</span><strong>${effect.equivalent_hours ?? m.drone_hours_per_day} 小时 / 日</strong></div>
-  </div><div class="drone-target"><span>投向</span><strong>${escapeHtml(effect.target||m.drone_target||"未使用")}</strong></div>
+  </div><div class="drone-target"><span>收取时的实际分流</span><strong>${escapeHtml(effect.target||m.drone_target||"未使用")}</strong></div>
+  <div class="drone-routes">${allocations.map(item=>`<div><span><b>${escapeHtml(item.team?`${item.team} 班 · `:"")}${escapeHtml(item.label||item.kind)}</b><small>${escapeHtml(item.target||"")}</small></span><strong>${number(Math.round(+item.drones_per_day||0))} 架<small>${(+item.fraction*100||0).toFixed(1)}%</small></strong></div>`).join("")||'<p class="side-note">没有无人机投入。</p>'}</div>
   <div class="drone-deltas">${contributions.map(([label,value])=>`<p><span>${label}</span><strong>${signed(value,3)} / 日</strong></p>`).join("")||'<p><span>当前设置不把无人机计入产出</span></p>'}</div>
-  <p class="side-note">以上增量已同时进入解析期望、24 小时折线与快进模拟，不是单独展示的附加数字。</p>`;
+  ${effect.balance?`<p class="constraint ${effect.balance.reachable?"ok":"warn"}">自动瓶颈：${effect.balance.bottleneck==="gold"?"赤金供给":"贸易兑现"} · 用户允许 ${signed(effect.balance.target_gold_net_per_day)}/日 · 可达区间 ${signed(effect.balance.all_trade_gold_net_per_day)} ～ ${signed(effect.balance.all_gold_gold_net_per_day)}/日 · 分流后 ${signed(effect.balance.projected_gold_net_per_day)}/日 · ${effect.balance.binding?"目标正在约束分流":effect.balance.regime==="trade_saturated"?"目标未生效：已 100% 投贸易，再放宽不会增加收益":effect.balance.reachable?"混合班次中部分目标未生效":"即使全投赤金仍不可达"}</p>`:""}
+  <p class="side-note">无人机先恢复进库存，达到 ${m.drone_capacity || 235} 架后暂停恢复，只在下方标出的收取节点投入；解析曲线在节点跳变，随机模拟重放相同分流。</p>`;
 }
 
 function renderCrossRoomFlows(flows) {
@@ -361,27 +377,32 @@ function renderRotation(rotation) {
   </div>`).join("");
   const inventoryNote=rotation.inventory_policy?.note || "";
   const dormNote=rotation.dormitory?.note || "";
-  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>房间</strong><div>${ticks}</div></div>${rows}<p class="timeline-note">${escapeHtml(rotation.morale.note)} 排程校验：${rotation.morale.feasible ? "两队均可在下次上班前恢复" : "存在恢复时间或床位小时不足"}。${escapeHtml(dormNote)} ${escapeHtml(inventoryNote)} 悬停班次查看干员、技能、效率与结束心情。</p>`;
+  const droneEvents=rotation.production_curve?.drone_events||[];
+  const eventLedger=droneEvents.length?`<div class="drone-event-ledger"><strong>无人机收取/投入事件</strong>${droneEvents.map(event=>`<span><b>${event.minute/60}h · ${event.team}班 · ${number(Math.round(event.drones_spent))} 架</b>${(event.targets||[]).map(target=>`${escapeHtml(target.label)} ${number(Math.round(target.drones))}`).join(" / ")||"保留"}</span>`).join("")}</div>`:"";
+  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>房间</strong><div>${ticks}</div></div>${rows}${eventLedger}<p class="timeline-note">${escapeHtml(rotation.morale.note)} 排程校验：${rotation.morale.feasible ? "两队均可在下次上班前恢复" : "存在恢复时间或床位小时不足"}。${escapeHtml(dormNote)} ${escapeHtml(inventoryNote)} 悬停班次查看干员、技能、效率与结束心情。</p>`;
 }
 
-const curveLabels={lmd_per_day:"龙门币",exp_per_day:"作战经验",gold_net_per_day:"赤金净流量",gold_made_per_day:"赤金制造",gold_used_per_day:"赤金消耗",orundum_per_day:"合成玉",drones_per_day:"无人机"};
+const curveLabels={lmd_per_day:"龙门币",exp_per_day:"作战经验",gold_net_per_day:"赤金净流量",gold_made_per_day:"赤金制造",gold_used_per_day:"赤金消耗",orundum_per_day:"合成玉",drones_per_day:"无人机库存"};
 
-function curveSvg(points, key, field, title, color) {
-  const width=760,height=190,pad={l:64,r:20,t:24,b:32};
-  const values=points.map(point=>+point[field][key]||0);
-  let min=Math.min(0,...values), max=Math.max(0,...values);
-  if (Math.abs(max-min)<1e-9) max=min+1;
+function combinedCurveSvg(points,key,label,events) {
+  const width=980,height=330,pad={l:72,r:72,t:48,b:42};
+  const cumulative=points.map(point=>+point.cumulative[key]||0), rates=points.map(point=>+point.rates_per_hour[key]||0);
+  const domain=values=>{let min=Math.min(0,...values),max=Math.max(0,...values);if(Math.abs(max-min)<1e-9)max=min+1;return [min,max]};
+  const [cmin,cmax]=domain(cumulative),[rmin,rmax]=domain(rates);
   const x=minute=>pad.l+minute/1440*(width-pad.l-pad.r);
-  const y=value=>height-pad.b-(value-min)/(max-min)*(height-pad.t-pad.b);
-  const polyline=points.map(point=>`${x(point.minute).toFixed(2)},${y(+point[field][key]||0).toFixed(2)}`).join(" ");
-  const zero=y(0);
-  const ticks=[0,6,12,18,24].map(hour=>`<text x="${x(hour*60)}" y="180" text-anchor="middle">${hour}h</text>`).join("");
-  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(title)}">
-    <text x="12" y="16" class="curve-title">${escapeHtml(title)}</text>
-    <line x1="${pad.l}" y1="${zero}" x2="${width-pad.r}" y2="${zero}" class="curve-zero"/>
-    <text x="${pad.l-8}" y="${pad.t+4}" text-anchor="end">${number(Math.round(max))}</text>
-    <text x="${pad.l-8}" y="${height-pad.b}" text-anchor="end">${number(Math.round(min))}</text>
-    ${ticks}<polyline points="${polyline}" fill="none" stroke="${color}" stroke-width="3" vector-effect="non-scaling-stroke"/>
+  const scale=(value,min,max)=>height-pad.b-(value-min)/(max-min)*(height-pad.t-pad.b);
+  const cy=value=>scale(value,cmin,cmax),ry=value=>scale(value,rmin,rmax);
+  const line=(field,y)=>points.map(point=>`${x(point.minute).toFixed(2)},${y(+point[field][key]||0).toFixed(2)}`).join(" ");
+  const ticks=[0,4,8,12,16,20,24].map(hour=>`<g><line x1="${x(hour*60)}" y1="${pad.t}" x2="${x(hour*60)}" y2="${height-pad.b}" class="curve-grid-line"/><text x="${x(hour*60)}" y="${height-14}" text-anchor="middle">${hour}h</text></g>`).join("");
+  const markers=(events||[]).map(event=>{const title=`${Math.floor(event.minute/60)}h 收取 · ${event.team} 班 · 投入 ${event.drones_spent} 架 · ${(event.targets||[]).map(t=>`${t.label} ${t.drones}`).join(" / ")}`;return `<g class="drone-marker"><line x1="${x(event.minute)}" y1="${pad.t}" x2="${x(event.minute)}" y2="${height-pad.b}"/><circle cx="${x(event.minute)}" cy="${cy(points.find(p=>p.minute===event.minute)?.cumulative[key]||0)}" r="5"><title>${escapeHtml(title)}</title></circle></g>`}).join("");
+  const cumulativeLabel=key==="drones_per_day" ? "当前库存（左轴）" : `累计 ${label}（左轴）`;
+  return `<svg class="combined-curve" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(label)}累计与实时速率">
+    ${ticks}<line x1="${pad.l}" y1="${cy(0)}" x2="${width-pad.r}" y2="${cy(0)}" class="curve-zero"/>${markers}
+    <polyline points="${line("cumulative",cy)}" class="curve-cumulative" vector-effect="non-scaling-stroke"/>
+    <polyline points="${line("rates_per_hour",ry)}" class="curve-rate" vector-effect="non-scaling-stroke"/>
+    <text x="${pad.l-10}" y="${pad.t+3}" text-anchor="end">${number(Math.round(cmax))}</text><text x="${pad.l-10}" y="${height-pad.b}" text-anchor="end">${number(Math.round(cmin))}</text>
+    <text x="${width-pad.r+10}" y="${pad.t+3}">${number(Math.round(rmax))}/h</text><text x="${width-pad.r+10}" y="${height-pad.b}">${number(Math.round(rmin))}/h</text>
+    <g class="curve-legend"><line x1="${pad.l}" y1="22" x2="${pad.l+24}" y2="22" class="curve-cumulative"/><text x="${pad.l+31}" y="26">${escapeHtml(cumulativeLabel)}</text><line x1="${pad.l+230}" y1="22" x2="${pad.l+254}" y2="22" class="curve-rate"/><text x="${pad.l+261}" y="26">实时速率 / 小时（右轴）</text><circle cx="${pad.l+474}" cy="22" r="4" class="legend-drone"/><text x="${pad.l+485}" y="26">无人机投入节点</text></g>
   </svg>`;
 }
 
@@ -397,23 +418,24 @@ function renderYieldCurve(curve) {
   const rates=points.map(point=>+point.rates_per_hour[key]||0);
   const transitions=points.filter((point,index)=>index===0||point.team!==points[index-1].team)
     .map(point=>`${Math.floor(point.minute/60)}:${String(point.minute%60).padStart(2,"0")} ${point.team}班`).join(" → ");
-  $("yieldCurve").innerHTML=`<div class="curve-summary"><div><span>24h 累计</span><strong>${signed(final)} ${escapeHtml(label)}</strong></div><div><span>小时速率范围</span><strong>${signed(Math.min(...rates))} ～ ${signed(Math.max(...rates))}</strong><small>每分钟 ${signed(Math.min(...rates)/60,3)} ～ ${signed(Math.max(...rates)/60,3)}</small></div><div><span>班次切换</span><strong>${escapeHtml(transitions)}</strong></div></div>
-    <div class="curve-grid">${curveSvg(points,key,"cumulative",`${label} · 累计收益`,"#53d3c8")}${curveSvg(points,key,"rates_per_hour",`${label} · 当前每小时速率`,"#78a9ff")}</div><p class="side-note">${escapeHtml(curve.note)}</p>`;
+  $("yieldCurve").innerHTML=`<div class="curve-summary"><div><span>${key==="drones_per_day"?"24h 末库存":"24h 累计"}</span><strong>${signed(final)} ${escapeHtml(label)}</strong></div><div><span>${key==="drones_per_day"?"恢复速率范围":"小时速率范围"}</span><strong>${signed(Math.min(...rates))} ～ ${signed(Math.max(...rates))}</strong><small>每分钟 ${signed(Math.min(...rates)/60,3)} ～ ${signed(Math.max(...rates)/60,3)}</small></div><div><span>班次切换</span><strong>${escapeHtml(transitions)}</strong></div></div>
+    ${combinedCurveSvg(points,key,label,curve.drone_events)}<p class="side-note">${escapeHtml(curve.note)}</p>`;
 }
 
 $("curveMetric").addEventListener("change",()=>renderYieldCurve(state.lastResult?.rotation?.production_curve));
 
 async function simulateSchedule(result, days, trials) {
   const plans=result.rotation ? Object.values(result.rotation.teams) : [{rooms:result.rooms,metrics:result.metrics}];
-  const samples=await Promise.all(plans.map((plan,index)=>request("/api/simulate", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({rooms:plan.rooms, metrics:plan.metrics, days, trials, seed:20260815+index})})));
+  const samples=await Promise.all(plans.map(plan=>request("/api/simulate", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({rooms:plan.rooms, metrics:plan.metrics, days, trials})})));
   if(samples.length===1) return samples[0];
   const expected=result.rotation.average_metrics;
   const durations=result.rotation.team_work_hours||{A:1,B:1};
   const weights=[durations.A||1,durations.B||1], weightTotal=weights[0]+weights[1];
   const keys=["lmd_per_day","lmd_p05","lmd_p95","exp_per_day","gold_made_per_day","gold_used_per_day","gold_net_per_day","orundum_per_day","shards_made_per_day","shards_used_per_day","shards_net_per_day"];
   const simulated={}; keys.forEach(key=>simulated[key]=samples.reduce((sum,x,index)=>sum+(+x.simulated[key]||0)*weights[index],0)/weightTotal);
+  const sample_run={}; ["lmd_per_day","gold_used_per_day","gold_net_per_day"].forEach(key=>sample_run[key]=samples.reduce((sum,x,index)=>sum+(+x.sample_run[key]||0)*weights[index],0)/weightTotal);
   const difference_percent={}; ["lmd_per_day","exp_per_day","gold_made_per_day","gold_used_per_day","orundum_per_day","shards_made_per_day","shards_used_per_day"].forEach(key=>difference_percent[key]=expected[key]?((simulated[key]-expected[key])/Math.abs(expected[key])*100):null);
-  return {days,trials,simulated,expected,difference_percent,assumptions:[`A/B 两套队伍分别模拟后按在岗时长 ${weights[0]}:${weights[1]} 合并。`,...samples[0].assumptions]};
+  return {days,trials,simulated,sample_run,seed:samples.map(x=>x.seed).join(" / "),expected,difference_percent,assumptions:[`A/B 两套队伍分别模拟后按在岗时长 ${weights[0]}:${weights[1]} 合并。`,...samples[0].assumptions]};
 }
 
 async function runQuickSimulation(result) {
@@ -426,7 +448,7 @@ async function runQuickSimulation(result) {
     $("quickSimulation").innerHTML = `<div class="quick-grid">
       <div><span>模拟龙门币</span><strong>${number(Math.round(s.lmd_per_day))}</strong><small>${signed(d.lmd_per_day,3)}%</small></div>
       <div><span>模拟赤金净流</span><strong>${signed(s.gold_net_per_day)}</strong><small>根 / 日</small></div>
-    </div><p class="convergence ${Math.abs(d.lmd_per_day || 0) < 1 ? "ok" : "warn"}">${Math.abs(d.lmd_per_day || 0) < 1 ? "✓ A/B 两队模拟已收敛" : "△ 与解析期望存在可见偏差"}</p><p class="side-note">龙门币 90% 区间 ${number(Math.round(s.lmd_p05))}–${number(Math.round(s.lmd_p95))}。阶段技能已先按班内分段积分，再进入完整产品结算。</p>`;
+    </div><p class="convergence ${Math.abs(d.lmd_per_day || 0) < 1 ? "ok" : "warn"}">${Math.abs(d.lmd_per_day || 0) < 1 ? "✓ 多次随机试验的均值已收敛" : "△ 与解析期望存在可见偏差"}</p><p class="side-note">本次第 1 条随机轨迹：龙门币 ${number(Math.round(data.sample_run?.lmd_per_day||0))}/日，赤金净流 ${signed(data.sample_run?.gold_net_per_day||0)}/日；随机种子 ${escapeHtml(data.seed)}。再次运行会生成新订单序列。均值的 90% 区间 ${number(Math.round(s.lmd_p05))}–${number(Math.round(s.lmd_p95))}。</p>`;
   } catch (error) {
     if (sequence === state.quickSimSequence) $("quickSimulation").innerHTML = `<p class="side-note error-copy">模拟失败：${escapeHtml(error.message)}</p>`;
   }
@@ -469,7 +491,7 @@ function renderSimulation(data) {
     card("赤金制造 / 日", s.gold_made_per_day, "gold_made_per_day") +
     card("赤金消耗 / 日", s.gold_used_per_day, "gold_used_per_day") +
     (s.orundum_per_day > 0 ? card("合成玉 / 日", Math.round(s.orundum_per_day), "orundum_per_day") + card("碎片净变化 / 日", signed(s.shards_net_per_day), "shards_made_per_day") : "") +
-    `<p class="simulation-notes">快进 ${data.days} 天 × ${number(data.trials)} 次。${data.assumptions.map(escapeHtml).join(" ")}</p>`;
+    `<p class="simulation-notes">本轮第 1 条轨迹：龙门币 ${number(Math.round(data.sample_run?.lmd_per_day||0))}/日，赤金净流 ${signed(data.sample_run?.gold_net_per_day||0)}/日；随机种子 ${escapeHtml(data.seed)}。快进 ${data.days} 天 × ${number(data.trials)} 次。${data.assumptions.map(escapeHtml).join(" ")}</p>`;
   $("simulationResult").classList.remove("hidden");
 }
 

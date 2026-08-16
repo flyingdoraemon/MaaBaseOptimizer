@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from statistics import fmean
+from statistics import fmean, pstdev
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -43,9 +43,16 @@ def simulate(payload: dict) -> dict:
     expected = payload.get("metrics") or {}
     days = max(1, min(365, int(payload.get("days", 30))))
     trials = max(100, min(5000, int(payload.get("trials", 1000))))
-    seed = int(payload.get("seed", 20260815))
+    raw_seed = payload.get("seed")
+    seed = int(raw_seed) if raw_seed not in (None, "") else random.SystemRandom().randrange(1, 2**63)
     drone_hours = float(expected.get("drone_hours_per_day", 0) or 0)
     drone_note = str(expected.get("drone_target") or "")
+    drone_allocations = (expected.get("drone_effect") or {}).get("allocations") or []
+    drone_minutes_by_operators = {
+        tuple(sorted(str(operator) for operator in allocation.get("target_operators") or [])):
+            float(allocation.get("drones_per_day", 0) or 0) * 3.0
+        for allocation in drone_allocations
+    }
     external_gold = float(expected.get("gold_external_per_day", 0) or 0)
 
     lmd_samples: list[float] = []
@@ -57,7 +64,8 @@ def simulate(payload: dict) -> dict:
         gold_used = 0.0
         for room in trade_rooms:
             names = " / ".join(room.get("names") or [])
-            extra = drone_hours * 60.0 if names and names in drone_note else 0.0
+            signature = tuple(sorted(str(operator) for operator in room.get("operators") or []))
+            extra = drone_minutes_by_operators.get(signature, drone_hours * 60.0 if names and names in drone_note else 0.0)
             horizon = days * (1440.0 + extra)
             elapsed = 0.0
             multiplier = float(room.get("multiplier", 1.0))
@@ -87,7 +95,8 @@ def simulate(payload: dict) -> dict:
         if key not in {"gold", "exp", "shard", "orundum"}:
             continue
         names = " / ".join(room.get("names") or [])
-        extra = drone_hours * 60.0 if names and names in drone_note else 0.0
+        signature = tuple(sorted(str(operator) for operator in room.get("operators") or []))
+        extra = drone_minutes_by_operators.get(signature, drone_hours * 60.0 if names and names in drone_note else 0.0)
         horizon = days * (1440.0 + extra)
         multiplier = float(room.get("multiplier", 1.0))
         if key == "gold":
@@ -118,6 +127,11 @@ def simulate(payload: dict) -> dict:
         "shards_used_per_day": round(shards_used, 3),
         "shards_net_per_day": round(shards_made - shards_used, 3),
     }
+    sample_run = {
+        "lmd_per_day": round(lmd_samples[0], 2),
+        "gold_used_per_day": round(gold_used_samples[0], 3),
+        "gold_net_per_day": round(gold_made + external_gold - gold_used_samples[0], 3),
+    }
 
     # A transparent inventory ledger at the same collection events used by the
     # schedule. Production and orders are allowed to run from an existing
@@ -144,7 +158,7 @@ def simulate(payload: dict) -> dict:
         f"制造站与贸易站按每 {collection_hours:g} 小时同一节点结算库存；排班期望假设开班已有足够周转库存，不做从零启动串行阻塞。",
         "心情耗尽与恢复由排班器审计；本随机层只重放在岗期间的产品和订单。",
         "订单品质先按班内线性暖机曲线积分成班均分布；快进与解析层重放同一分布，换班时重新开始暖机。",
-        "无人机按期望模型的同一目标折算为额外倒计时时间。",
+        "无人机按收取节点分配给贸易站与制造站；随机层把各节点投入折算为对应房间的额外倒计时时间。",
     ]
     if any("平均空位" in note for room in rooms for note in room.get("mechanic_notes", [])):
         assumptions.append("孑的订单空位加成先由收单周期稳态队列折算为班均速度；随机层尚未逐格重放订单仓库。")
@@ -153,6 +167,8 @@ def simulate(payload: dict) -> dict:
         "trials": trials,
         "seed": seed,
         "simulated": simulated,
+        "sample_run": sample_run,
+        "standard_deviation": {"lmd_per_day": round(pstdev(lmd_samples), 3)},
         "expected": expected,
         "difference_percent": {
             key: delta(key) for key in ("lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",

@@ -9,7 +9,7 @@ from typing import Any
 
 from .model import generate_candidates, prepare_operators
 from .morale import analyze_morale, choose_dorm_helper
-from .scheduler import build_rotation
+from .scheduler import DRONE_CAPACITY, build_rotation
 from .valuation import candidate_daily_value, public_valuation
 from .state_model import (
     ABYSSAL_HUNTER_IDS,
@@ -148,6 +148,7 @@ def _metrics(
     external_gold_per_day: float = 0.0, gold_inventory: float = 0.0,
     shard_recipe: str = "rock", shard_inventory: float = 0.0,
     collection_interval_hours: float = 8.0,
+    gold_net_target_per_day: float = -20.0,
 ) -> dict:
     constants = catalog["constants"]
     trade = selected.get("trade", [])
@@ -175,49 +176,135 @@ def _metrics(
     shard_lmd_cost = shards_made * (1600.0 if shard_recipe == "rock" else 1000.0)
     shard_material_used = shards_made * (2.0 if shard_recipe == "rock" else 1.0)
     power_bonus = sum(5.0 + c["efficiency"] for c in power)
-    drones = 1440.0 / constants["drone_recover_minutes"] * (1.0 + power_bonus / 100.0)
+    drone_recovery_potential = 1440.0 / constants["drone_recover_minutes"] * (1.0 + power_bonus / 100.0)
+    # With a fixed collection cadence the inventory can be emptied at most
+    # once per interval. Recovery pauses at the 235-drone cap.
+    drones = min(drone_recovery_potential, DRONE_CAPACITY * 24.0 / collection_interval_hours)
     drone_hours = drones * constants["drone_minutes"] / 60.0
-    drone_note = "未使用"
-    if drone_target == "trade" and trade:
+    # One drone removes three base minutes, so a full day of a target room is
+    # 480 drones regardless of that room's speed.  Keep the per-drone ledger:
+    # the scheduler can then spend the accumulated bank at actual collection
+    # nodes instead of smearing acceleration continuously across the day.
+    profiles: dict[str, dict] = {}
+    if trade:
         target = max(trade, key=lambda x: float((x.get("trade") or {}).get("lmd_per_day", 0)))
-        target_trade = target.get("trade") or {}
-        lmd += float(target_trade.get("lmd_per_day", constants["trade_lmd_base_per_day"] * target["multiplier"])) / 24.0 * drone_hours
-        gold_used += float(target_trade.get("gold_per_day", constants["trade_gold_base_per_day"] * target["multiplier"])) / 24.0 * drone_hours
-        drone_note = f"贸易站：{' / '.join(target['names'])}"
-    elif drone_target == "gold" and gold:
+        econ = target.get("trade") or {}
+        profiles["trade"] = {
+            "kind": "trade", "label": "贸易订单", "target": f"贸易站：{' / '.join(target['names'])}",
+            "target_operators": list(target.get("operators") or []),
+            "per_drone": {
+                "lmd_per_day": float(econ.get("lmd_per_day", constants["trade_lmd_base_per_day"] * target["multiplier"])) / 480.0,
+                "gold_used_per_day": float(econ.get("gold_per_day", constants["trade_gold_base_per_day"] * target["multiplier"])) / 480.0,
+            },
+        }
+    if gold:
         target = max(gold, key=lambda x: x["multiplier"])
-        gold_made += constants["gold_base_per_day"] / 24.0 * target["multiplier"] * drone_hours
-        drone_note = f"赤金制造：{' / '.join(target['names'])}"
-    elif drone_target == "exp" and exp:
+        profiles["gold"] = {
+            "kind": "gold", "label": "赤金制造", "target": f"赤金制造：{' / '.join(target['names'])}",
+            "target_operators": list(target.get("operators") or []),
+            "per_drone": {"gold_made_per_day": constants["gold_base_per_day"] * target["multiplier"] / 480.0},
+        }
+    if exp:
         target = max(exp, key=lambda x: x["multiplier"])
-        experience += constants["exp_base_per_day"] / 24.0 * target["multiplier"] * drone_hours
-        drone_note = f"作战记录制造：{' / '.join(target['names'])}"
-    elif drone_target == "shard" and shard:
+        profiles["exp"] = {
+            "kind": "exp", "label": "作战记录制造", "target": f"作战记录制造：{' / '.join(target['names'])}",
+            "target_operators": list(target.get("operators") or []),
+            "per_drone": {"exp_per_day": constants["exp_base_per_day"] * target["multiplier"] / 480.0},
+        }
+    if shard:
         target = max(shard, key=lambda x: x["multiplier"])
-        extra = 1.0 / 24.0 * target["multiplier"] * drone_hours
-        shards_made += extra
-        shard_lmd_cost += extra * (1600.0 if shard_recipe == "rock" else 1000.0)
-        shard_material_used += extra * (2.0 if shard_recipe == "rock" else 1.0)
-        drone_note = f"源石碎片制造：{' / '.join(target['names'])}"
-    elif drone_target == "orundum" and orundum_trade:
-        target = max(orundum_trade, key=lambda x: x["multiplier"])
+        profiles["shard"] = {
+            "kind": "shard", "label": "源石碎片制造", "target": f"源石碎片制造：{' / '.join(target['names'])}",
+            "target_operators": list(target.get("operators") or []),
+            "per_drone": {"shards_made_per_day": 24.0 * target["multiplier"] / 480.0},
+        }
+    if orundum_trade:
+        target = max(orundum_trade, key=lambda x: float((x.get("orundum") or {}).get("orundum_per_day", 0)))
         econ = target.get("orundum") or {}
-        orundum += float(econ.get("orundum_per_day", 240.0 * target["multiplier"])) / 24.0 * drone_hours
-        shards_used += float(econ.get("shards_per_day", 24.0 * target["multiplier"])) / 24.0 * drone_hours
-        drone_note = f"源石订单：{' / '.join(target['names'])}"
+        profiles["orundum"] = {
+            "kind": "orundum", "label": "源石订单", "target": f"源石订单：{' / '.join(target['names'])}",
+            "target_operators": list(target.get("operators") or []),
+            "per_drone": {
+                "orundum_per_day": float(econ.get("orundum_per_day", 240.0 * target["multiplier"])) / 480.0,
+                "shards_used_per_day": float(econ.get("shards_per_day", 24.0 * target["multiplier"])) / 480.0,
+            },
+        }
+
+    allocations: list[dict] = []
+    base_gold_net = gold_made - gold_used + external_gold_per_day
+    balance = None
+    if drone_target in {"auto_balance", "auto_lmd"} and "trade" in profiles:
+        trade_profile = profiles["trade"]
+        trade_gold = float(trade_profile["per_drone"].get("gold_used_per_day", 0))
+        gold_per_drone = float((profiles.get("gold") or {}).get("per_drone", {}).get("gold_made_per_day", 0))
+        gold_drones = 0.0
+        if gold_per_drone > 0:
+            # Gold is an intermediate input. The user supplies the acceptable
+            # daily inventory change (which can be negative because missions,
+            # events, the credit shop, and existing stock subsidize the chain).
+            # Use only enough drones on gold to reach that target; every
+            # remaining drone goes to orders that realize LMD.
+            gold_drones = max(0.0, min(drones, (gold_net_target_per_day - base_gold_net + drones * trade_gold) / (gold_per_drone + trade_gold)))
+        projected = base_gold_net + gold_drones * gold_per_drone - (drones - gold_drones) * trade_gold
+        all_trade_net = base_gold_net - drones * trade_gold
+        all_gold_net = base_gold_net + drones * gold_per_drone
+        binding = abs(projected - gold_net_target_per_day) < 1e-6
+        regime = (
+            "balanced" if binding else
+            "trade_saturated" if gold_net_target_per_day < all_trade_net else
+            "gold_saturated"
+        )
+        balance = {
+            "policy": "supply_demand_balance", "base_gold_net_per_day": round(base_gold_net, 3),
+            "target_gold_net_per_day": round(gold_net_target_per_day, 3),
+            "projected_gold_net_per_day": round(projected, 3),
+            "all_trade_gold_net_per_day": round(all_trade_net, 3),
+            "all_gold_gold_net_per_day": round(all_gold_net, 3),
+            "bottleneck": "gold" if gold_drones > 1e-9 else "trade",
+            "balanced": binding,
+            "binding": binding,
+            "regime": regime,
+            "reachable": projected >= gold_net_target_per_day - 1e-6,
+        }
+        if gold_drones > 1e-9 and "gold" in profiles:
+            allocations.append({**profiles["gold"], "drones_per_day": gold_drones})
+        if drones - gold_drones > 1e-9:
+            allocations.append({**trade_profile, "drones_per_day": drones - gold_drones})
+    elif drone_target in profiles:
+        allocations.append({**profiles[drone_target], "drones_per_day": drones})
+
+    delta = {key: 0.0 for key in before_drones}
+    for allocation in allocations:
+        amount = float(allocation["drones_per_day"])
+        allocation["fraction"] = amount / drones if drones else 0.0
+        allocation["equivalent_hours"] = amount * constants["drone_minutes"] / 60.0
+        allocation["deltas"] = {
+            key: float(value) * amount for key, value in allocation["per_drone"].items()
+        }
+        for key, value in allocation["deltas"].items():
+            delta[key] += value
+    lmd += delta["lmd_per_day"]
+    experience += delta["exp_per_day"]
+    gold_made += delta["gold_made_per_day"]
+    gold_used += delta["gold_used_per_day"]
+    shards_made += delta["shards_made_per_day"]
+    shards_used += delta["shards_used_per_day"]
+    orundum += delta["orundum_per_day"]
+    shard_lmd_cost += delta["shards_made_per_day"] * (1600.0 if shard_recipe == "rock" else 1000.0)
+    shard_material_used += delta["shards_made_per_day"] * (2.0 if shard_recipe == "rock" else 1.0)
+    drone_note = " + ".join(
+        f"{item['label']} {item['fraction'] * 100:.1f}%" for item in allocations
+    ) or "未使用"
     production_net = gold_made - gold_used
     total_net = production_net + external_gold_per_day
     drone_effect = {
         "target_kind": drone_target,
         "target": drone_note,
         "equivalent_hours": round(drone_hours, 3),
-        "lmd_per_day": round(lmd - before_drones["lmd_per_day"], 3),
-        "exp_per_day": round(experience - before_drones["exp_per_day"], 3),
-        "gold_made_per_day": round(gold_made - before_drones["gold_made_per_day"], 3),
-        "gold_used_per_day": round(gold_used - before_drones["gold_used_per_day"], 3),
-        "shards_made_per_day": round(shards_made - before_drones["shards_made_per_day"], 3),
-        "shards_used_per_day": round(shards_used - before_drones["shards_used_per_day"], 3),
-        "orundum_per_day": round(orundum - before_drones["orundum_per_day"], 3),
+        **{key: round(value, 3) for key, value in delta.items()},
+        "gold_net_per_day": round(delta["gold_made_per_day"] - delta["gold_used_per_day"], 3),
+        "allocations": allocations,
+        "balance": balance,
     }
     return {
         "lmd_per_day": round(lmd),
@@ -241,6 +328,9 @@ def _metrics(
         "collection_interval_hours": round(collection_interval_hours, 2),
         "inventory_policy": "working_stock",
         "drones_per_day": round(drones, 1),
+        "drones_recovery_potential_per_day": round(drone_recovery_potential, 1),
+        "drone_overflow_lost_per_day": round(max(0.0, drone_recovery_potential - drones), 1),
+        "drone_capacity": DRONE_CAPACITY,
         "drone_hours_per_day": round(drone_hours, 2),
         "drone_target": drone_note,
         "drone_effect": drone_effect,
@@ -250,6 +340,12 @@ def _metrics(
 
 def _warnings(selected: dict[str, list[dict]], metrics: dict) -> list[str]:
     warnings = []
+    drone_balance = (metrics.get("drone_effect") or {}).get("balance")
+    if drone_balance and not drone_balance.get("reachable"):
+        warnings.append(
+            f"即使把本班全部无人机投向赤金，预计赤金净流量仍为 {drone_balance['projected_gold_net_per_day']:+.1f}/日，"
+            f"无法达到用户允许的 {drone_balance['target_gold_net_per_day']:+.1f}/日；本班已采用最接近目标的分配。"
+        )
     net = metrics["gold_net_per_day"]
     production_net = metrics.get("gold_production_net_per_day", net)
     external = metrics.get("gold_external_per_day", 0)
@@ -286,6 +382,25 @@ def _room_rows(selected: dict[str, list[dict]]) -> list[dict]:
                 **candidate,
             })
     return rows
+
+
+def _assignment_signature(selected: dict[str, list[dict]]) -> tuple:
+    """Compare real room teams while ignoring interchangeable room numbers."""
+    return tuple(
+        (key, tuple(sorted(tuple(sorted(room.get("operators") or [])) for room in rooms)))
+        for key, rooms in sorted(selected.items())
+    )
+
+
+def _result_assignment_signature(result: dict) -> tuple:
+    teams = (result.get("rotation") or {}).get("teams") or {"A": result}
+    return tuple(
+        (team, _assignment_signature({
+            key: [room for room in plan.get("rooms", []) if room.get("key") == key]
+            for key in sorted({room.get("key") for room in plan.get("rooms", [])})
+        }))
+        for team, plan in sorted(teams.items())
+    )
 
 
 def _control_row(team: list[dict], context: BaseContext) -> dict | None:
@@ -479,6 +594,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     orundum_count = max(0, min(trade_count, int(payload.get("orundum_trades", 0))))
     lmd_trade_count = trade_count - orundum_count
     drone_target = payload.get("drone_target", "trade")
+    gold_net_target_per_day = max(-10000.0, min(10000.0, float(payload.get("gold_net_target_per_day", -20))))
     objective_mode = str(payload.get("objective_mode", "layout_output"))
     if objective_mode not in {"layout_output", "sanity_value"}:
         raise ValueError("排班目标必须是按布局产出或等效理智价值")
@@ -582,8 +698,15 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
         solver += f" · 比较 {len(control_options)} 种控制中枢状态"
     metrics = _metrics(
         selected, catalog, drone_target, external_gold_per_day, gold_inventory, shard_recipe,
-        shard_inventory, base_context.collection_interval_hours,
+        shard_inventory, base_context.collection_interval_hours, gold_net_target_per_day,
     )
+    alternate_mode = "layout_output" if objective_mode == "sanity_value" else "sanity_value"
+    alternate_selected, alternate_solver = _solve(candidates, groups, alternate_mode, reusable_ids)
+    alternate_metrics = _metrics(
+        alternate_selected, catalog, drone_target, external_gold_per_day, gold_inventory, shard_recipe,
+        shard_inventory, base_context.collection_interval_hours, gold_net_target_per_day,
+    )
+    same_assignment = _assignment_signature(selected) == _assignment_signature(alternate_selected)
     control_row = _control_row(control_team, context)
     occupied = {operator for values in selected.values() for room in values for operator in room.get("operators", [])}
     occupied.update(operator["id"] for operator in control_team)
@@ -608,6 +731,24 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
             "mode": objective_mode,
             "label": "一图流等效理智价值" if objective_mode == "sanity_value" else "按用户选定布局分别最大化产出",
             "hard_constraints": f"{lmd_trade_count} 龙门贸易站 / {orundum_count} 源石贸易站 / {gold_count} 赤金站 / {exp_count} 经验站 / {shard_count} 碎片站",
+            "comparison": {
+                "alternate_mode": alternate_mode,
+                "alternate_label": "一图流等效理智价值" if alternate_mode == "sanity_value" else "按用户选定布局分别最大化产出",
+                "same_semantic_assignment": same_assignment,
+                "scope": "同一控制中枢状态与同一候选集",
+                "solver": alternate_solver,
+                "current_scores": {
+                    "layout_output": round(sum(_utility(room, key, "layout_output") for key, rooms in selected.items() for room in rooms), 6),
+                    "sanity_value": round(sum(_utility(room, key, "sanity_value") for key, rooms in selected.items() for room in rooms), 6),
+                },
+                "alternate_scores": {
+                    "layout_output": round(sum(_utility(room, key, "layout_output") for key, rooms in alternate_selected.items() for room in rooms), 6),
+                    "sanity_value": round(sum(_utility(room, key, "sanity_value") for key, rooms in alternate_selected.items() for room in rooms), 6),
+                },
+                "alternate_metrics": {key: alternate_metrics.get(key) for key in (
+                    "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day", "gold_net_per_day", "orundum_per_day"
+                )},
+            },
         },
         "metrics": metrics,
         "valuation": public_valuation(),
@@ -701,6 +842,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 max_work_hours=float(payload.get("max_work_hours", payload.get("shift_hours", 24))),
                 dorm_helper=dorm_helper,
                 fiammetta=result["fiammetta"],
+                objective_mode=objective_mode,
             )
             # Time-dependent skills were ranked using a provisional duration.
             # Re-run the whole A/B construction at the duration produced by the
@@ -726,4 +868,26 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
             result["warnings"].append(
                 f"A 队排定后只剩 {len(remaining)} 名可用干员，无法生成完全互斥的 B 队；请补充 Box 或放宽辅助设施范围。"
             )
+    if (
+        payload.get("include_rotation") and result.get("rotation")
+        and not payload.get("_rotation_internal") and not payload.get("_objective_audit_internal")
+    ):
+        alternate_result = optimize(
+            {**payload, "objective_mode": alternate_mode, "_objective_audit_internal": True},
+            catalog, include_frontier=False,
+        )
+        comparison = result["objective"]["comparison"]
+        comparison.update({
+            "scope": "完整 A/B 排班、工时与控制中枢搜索",
+            "same_semantic_assignment": _result_assignment_signature(result) == _result_assignment_signature(alternate_result),
+            "same_work_durations": (
+                (result["rotation"].get("team_work_hours") or {})
+                == ((alternate_result.get("rotation") or {}).get("team_work_hours") or {})
+            ),
+            "alternate_metrics": {
+                key: (alternate_result.get("rotation") or {}).get("average_metrics", alternate_result["metrics"]).get(key)
+                for key in ("lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day", "gold_net_per_day", "orundum_per_day")
+            },
+            "alternate_work_durations": (alternate_result.get("rotation") or {}).get("team_work_hours"),
+        })
     return result

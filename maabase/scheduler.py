@@ -5,10 +5,11 @@ from __future__ import annotations
 import math
 import re
 
-from .valuation import metrics_daily_value
+from .valuation import metrics_daily_value, metrics_layout_score
 
 
 BASE_RECOVERY_PER_HOUR = 4.0
+DRONE_CAPACITY = 235.0
 
 
 def _morale_rates(room: dict) -> dict[str, float]:
@@ -140,9 +141,10 @@ def _fiammetta_audit(
     }
 
 
-def _production_score(team: dict) -> float:
+def _production_score(team: dict, objective_mode: str) -> float:
     """Value a complete shift in the same unit used by assignment search."""
-    return metrics_daily_value(team.get("metrics") or {})
+    metrics = team.get("metrics") or {}
+    return metrics_daily_value(metrics) if objective_mode == "sanity_value" else metrics_layout_score(metrics)
 
 
 def _choose_durations(
@@ -153,13 +155,17 @@ def _choose_durations(
     maximum: float,
     dorm_helper: dict | None,
     fiammetta: dict | None,
+    objective_mode: str,
 ) -> tuple[dict[str, float], str]:
     """Choose a sustainable unequal cycle so the stronger team works longer."""
     options = {
         "A": _duration_options(team_a, collection, floor, maximum),
         "B": _duration_options(team_b, collection, floor, maximum),
     }
-    scores = {"A": _production_score(team_a), "B": _production_score(team_b)}
+    scores = {
+        "A": _production_score(team_a, objective_mode),
+        "B": _production_score(team_b, objective_mode),
+    }
     best: tuple[float, float, float, float] | None = None
     for a_hours in options["A"]:
         for b_hours in options["B"]:
@@ -196,7 +202,8 @@ def _average_metrics(a: dict, b: dict, a_hours: float = 1.0, b_hours: float = 1.
         "exp_per_day", "orundum_per_day", "shards_made_per_day", "shards_used_per_day",
         "shards_net_per_day", "shard_material_used_per_day", "gold_made_per_day",
         "gold_used_per_day", "gold_production_net_per_day", "gold_external_per_day",
-        "gold_net_per_day", "drones_per_day", "drone_hours_per_day", "power_bonus",
+        "gold_net_per_day", "drones_per_day", "drones_recovery_potential_per_day",
+        "drone_overflow_lost_per_day", "drone_hours_per_day", "power_bonus",
     }
     total = max(1e-9, a_hours + b_hours)
     result = dict(a)
@@ -220,6 +227,43 @@ def _average_metrics(a: dict, b: dict, a_hours: float = 1.0, b_hours: float = 1.
         "target_kind": "weighted_rotation",
         "target": "A/B 各自选择的目标房间，按实际在岗时长加权",
     })
+    allocations = []
+    for team, effect, weight in (("A", effects[0], a_hours), ("B", effects[1], b_hours)):
+        for allocation in effect.get("allocations") or []:
+            amount = float(allocation.get("drones_per_day", 0) or 0) * weight / total
+            allocations.append({
+                **allocation,
+                "team": team,
+                "drones_per_day": round(amount, 3),
+                "fraction": round(amount / float(result.get("drones_per_day", 1) or 1), 6),
+                "equivalent_hours": round(amount * 3.0 / 60.0, 3),
+                "deltas": {key: round(float(value) * weight / total, 3)
+                           for key, value in (allocation.get("deltas") or {}).items()},
+            })
+    result["drone_effect"]["allocations"] = allocations
+    balances = [effect.get("balance") for effect in effects]
+    if all(balances):
+        result["drone_effect"]["balance"] = {
+            "policy": "supply_demand_balance",
+            "base_gold_net_per_day": round((float(balances[0]["base_gold_net_per_day"]) * a_hours + float(balances[1]["base_gold_net_per_day"]) * b_hours) / total, 3),
+            "target_gold_net_per_day": round((float(balances[0]["target_gold_net_per_day"]) * a_hours + float(balances[1]["target_gold_net_per_day"]) * b_hours) / total, 3),
+            "projected_gold_net_per_day": round((float(balances[0]["projected_gold_net_per_day"]) * a_hours + float(balances[1]["projected_gold_net_per_day"]) * b_hours) / total, 3),
+            "all_trade_gold_net_per_day": round((float(balances[0]["all_trade_gold_net_per_day"]) * a_hours + float(balances[1]["all_trade_gold_net_per_day"]) * b_hours) / total, 3),
+            "all_gold_gold_net_per_day": round((float(balances[0]["all_gold_gold_net_per_day"]) * a_hours + float(balances[1]["all_gold_gold_net_per_day"]) * b_hours) / total, 3),
+            "reachable": bool(balances[0].get("reachable") and balances[1].get("reachable")),
+            "balanced": bool(balances[0].get("balanced") and balances[1].get("balanced")),
+            "binding": bool(balances[0].get("binding") and balances[1].get("binding")),
+            "regime": (
+                "balanced" if balances[0].get("binding") and balances[1].get("binding") else
+                "trade_saturated" if all(item.get("regime") == "trade_saturated" for item in balances) else
+                "mixed"
+            ),
+            "bottleneck": "gold" if any(item.get("kind") == "gold" for item in allocations) else "trade",
+        }
+        result["drone_effect"]["target"] = " + ".join(
+            f"{item.get('team')}班 {item.get('label')} {float(item.get('fraction', 0)) * 100:.1f}%"
+            for item in allocations
+        )
     net = float(result.get("gold_net_per_day", 0))
     inventory = float(a.get("gold_inventory", 0))
     result["gold_inventory"] = inventory
@@ -257,14 +301,32 @@ def _room_output_ratio(rooms: list[dict], elapsed_hours: float, value) -> float:
 
 def _instant_rates(team: dict, elapsed_hours: float) -> dict[str, float]:
     metrics = team.get("metrics") or {}
+    drone_effect = metrics.get("drone_effect") or {}
+    base_metrics = dict(metrics)
+    for key in (
+        "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
+        "orundum_per_day", "shards_made_per_day", "shards_used_per_day",
+    ):
+        base_metrics[key] = float(metrics.get(key, 0) or 0) - float(drone_effect.get(key, 0) or 0)
+    base_metrics["gold_net_per_day"] = (
+        float(metrics.get("gold_net_per_day", 0) or 0)
+        - float(drone_effect.get("gold_net_per_day", 0) or 0)
+    )
+    base_metrics["shards_net_per_day"] = (
+        float(base_metrics.get("shards_made_per_day", 0) or 0)
+        - float(base_metrics.get("shards_used_per_day", 0) or 0)
+    )
     rooms = team.get("rooms") or []
     rates = {
-        key: float(metrics.get(key, 0) or 0) / 24.0
+        key: float(base_metrics.get(key, 0) or 0) / 24.0
         for key in (
             "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
             "gold_net_per_day", "orundum_per_day", "shards_net_per_day", "drones_per_day",
         )
     }
+    rates["drones_per_day"] = float(
+        metrics.get("drones_recovery_potential_per_day", metrics.get("drones_per_day", 0)) or 0
+    ) / 24.0
     trade = [room for room in rooms if room.get("key") == "trade"]
     gold = [room for room in rooms if room.get("key") == "gold"]
     exp = [room for room in rooms if room.get("key") == "exp"]
@@ -285,24 +347,26 @@ def _instant_rates(team: dict, elapsed_hours: float) -> dict[str, float]:
     rates["orundum_per_day"] *= _room_output_ratio(
         orundum, elapsed_hours, lambda room: (room.get("orundum") or {}).get("orundum_per_day", 0)
     )
-    shards_made = float(metrics.get("shards_made_per_day", 0) or 0) / 24.0
-    shards_used = float(metrics.get("shards_used_per_day", 0) or 0) / 24.0
+    shards_made = float(base_metrics.get("shards_made_per_day", 0) or 0) / 24.0
+    shards_used = float(base_metrics.get("shards_used_per_day", 0) or 0) / 24.0
     shards_made *= _room_output_ratio(shard, elapsed_hours, lambda room: room.get("multiplier", 0))
     shards_used *= _room_output_ratio(
         orundum, elapsed_hours, lambda room: (room.get("orundum") or {}).get("shards_per_day", 0)
     )
     rates["shards_net_per_day"] = shards_made - shards_used
     external_gold = (
-        float(metrics.get("gold_net_per_day", 0) or 0)
-        - float(metrics.get("gold_made_per_day", 0) or 0)
-        + float(metrics.get("gold_used_per_day", 0) or 0)
+        float(base_metrics.get("gold_net_per_day", 0) or 0)
+        - float(base_metrics.get("gold_made_per_day", 0) or 0)
+        + float(base_metrics.get("gold_used_per_day", 0) or 0)
     ) / 24.0
     rates["gold_net_per_day"] = rates["gold_made_per_day"] - rates["gold_used_per_day"] + external_gold
     return rates
 
 
-def _production_curve(teams: dict[str, dict], durations: dict[str, float], minutes: int = 1440) -> dict:
-    """Create a 24-hour expected-rate and cumulative-yield curve."""
+def _production_curve(
+    teams: dict[str, dict], durations: dict[str, float], collection_hours: float, minutes: int = 1440,
+) -> dict:
+    """Integrate base production and spend the drone bank at collection nodes."""
     metric_keys = (
         "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
         "gold_net_per_day", "orundum_per_day", "shards_net_per_day", "drones_per_day",
@@ -315,27 +379,89 @@ def _production_curve(teams: dict[str, dict], durations: dict[str, float], minut
 
     cumulative = {key: 0.0 for key in metric_keys}
     points = []
+    drone_bank = 0.0
+    drone_events = []
     step = 15
-    for minute in range(0, minutes + 1, step):
-        label, elapsed_hours = active_team(
-            minute / 60.0 if minute < minutes else max(0.0, (minute - 1e-6) / 60.0)
+    collection_minutes = max(step, round(collection_hours * 60 / step) * step)
+    label, elapsed_hours = active_team(0)
+    rates = _instant_rates(teams[label], elapsed_hours)
+    points.append({
+        "minute": 0, "team": label,
+        "rates_per_hour": {key: round(value, 6) for key, value in rates.items()},
+        "cumulative": {key: 0.0 for key in metric_keys}, "drone_event": None,
+    })
+    for minute in range(step, minutes + 1, step):
+        # Integrate the interval using the team that was active immediately
+        # before its right edge. This also handles a handover/collection at the
+        # same timestamp in the same order as an in-game pre-shift collection.
+        outgoing, outgoing_elapsed = active_team(max(0.0, (minute - 1e-6) / 60.0))
+        interval_rates = _instant_rates(teams[outgoing], outgoing_elapsed)
+        for key, value in interval_rates.items():
+            if key != "drones_per_day":
+                cumulative[key] += value * step / 60.0
+        drone_bank = min(
+            DRONE_CAPACITY,
+            drone_bank + interval_rates["drones_per_day"] * step / 60.0,
         )
+
+        event = None
+        if minute % collection_minutes == 0:
+            effect = (teams[outgoing].get("metrics") or {}).get("drone_effect") or {}
+            allocations = effect.get("allocations") or []
+            event_deltas = {key: 0.0 for key in metric_keys}
+            event_targets = []
+            spent_total = 0.0
+            for allocation in allocations:
+                fraction = float(allocation.get("fraction", 0) or 0)
+                spent = drone_bank * fraction
+                spent_total += spent
+                deltas = {key: spent * float(value)
+                          for key, value in (allocation.get("per_drone") or {}).items()}
+                for key, value in deltas.items():
+                    if key in event_deltas:
+                        event_deltas[key] += value
+                event_targets.append({
+                    "kind": allocation.get("kind"), "label": allocation.get("label"),
+                    "target": allocation.get("target"), "drones": round(spent, 3),
+                    "deltas": {key: round(value, 6) for key, value in deltas.items()},
+                })
+            event_deltas["gold_net_per_day"] = (
+                event_deltas.get("gold_made_per_day", 0) - event_deltas.get("gold_used_per_day", 0)
+            )
+            # Drones are a generated-flow trace; spending them changes the bank
+            # but does not erase the cumulative number recovered.
+            for key, value in event_deltas.items():
+                if key != "drones_per_day":
+                    cumulative[key] += value
+            event = {
+                "minute": minute, "team": outgoing, "drones_spent": round(spent_total, 3),
+                "drone_inventory_before": round(drone_bank, 3),
+                "targets": event_targets,
+                "deltas": {key: round(value, 6) for key, value in event_deltas.items() if abs(value) > 1e-12},
+            }
+            drone_events.append(event)
+            drone_bank = max(0.0, drone_bank - spent_total)
+
+        cumulative["drones_per_day"] = drone_bank
+
+        label, elapsed_hours = active_team(minute / 60.0 if minute < minutes else max(0.0, (minute - 1e-6) / 60.0))
         rates = _instant_rates(teams[label], elapsed_hours)
         points.append({
             "minute": minute,
             "team": label,
             "rates_per_hour": {key: round(value, 6) for key, value in rates.items()},
             "cumulative": {key: round(value, 6) for key, value in cumulative.items()},
+            "drone_event": event,
         })
-        if minute < minutes:
-            for key, value in rates.items():
-                cumulative[key] += value * step / 60.0
     return {
         "hours": minutes / 60.0,
         "step_minutes": step,
         "points": points,
+        "drone_events": drone_events,
         "metrics": list(metric_keys),
-        "note": "曲线按当前班组每 15 分钟积分；班次边界切换速率，芬/克洛丝等整点阶段技能也按当时档位改变斜率。",
+        "note": (f"基础产出按当前班组每 15 分钟积分；无人机库存按实时恢复速度增长、上限 {DRONE_CAPACITY:g} 架，"
+                 f"并在每 {collection_hours:g} 小时收取节点按当班分配投入，所以无人机曲线是锯齿而非累计恢复量直线。"
+                 "班次边界与阶段技能改变实时斜率。"),
     }
 
 
@@ -351,6 +477,7 @@ def build_rotation(
     horizon_hours: float | None = None,
     dorm_helper: dict | None = None,
     fiammetta: dict | None = None,
+    objective_mode: str = "layout_output",
 ) -> dict:
     """Build a two-team schedule and a room-centric event timeline.
 
@@ -364,7 +491,7 @@ def build_rotation(
     teams = {"A": team_a, "B": team_b}
     if schedule_mode == "morale_aware":
         durations, duration_reason = _choose_durations(
-            team_a, team_b, collection, floor, maximum, dorm_helper, fiammetta
+            team_a, team_b, collection, floor, maximum, dorm_helper, fiammetta, objective_mode
         )
     else:
         if requested not in {8.0, 12.0}:
@@ -430,6 +557,7 @@ def build_rotation(
     rooms = sorted(room_rows.values(), key=lambda row: (room_order.get(row.get("key"), 99), row["room"]))
     return {
         "cycle_hours": horizon, "natural_cycle_hours": natural_cycle, "shift_hours": requested, "schedule_mode": schedule_mode,
+        "objective_mode": objective_mode,
         "collection_interval_hours": collection, "morale_floor": floor, "team_work_hours": durations,
         "duration_reason": duration_reason,
         "pattern": [shift["team"] for shift in shifts], "shifts": shifts, "rooms": rooms,
@@ -439,7 +567,7 @@ def build_rotation(
             "B": {"rooms": team_b.get("rooms", []), "support_rooms": team_b.get("support_rooms", []), "metrics": team_b["metrics"]},
         },
         "average_metrics": _average_metrics(team_a["metrics"], team_b["metrics"], worked_hours["A"], worked_hours["B"]),
-        "production_curve": _production_curve(teams, durations),
+        "production_curve": _production_curve(teams, durations, collection),
         "dormitory": {
             "locked_helper": dorm_helper,
             "fiammetta": fiammetta,

@@ -51,6 +51,20 @@ def metrics_daily_value(metrics: dict) -> float:
     )
 
 
+def metrics_layout_score(metrics: dict) -> float:
+    """Score a full shift by the output categories fixed by its layout."""
+    score = (
+        float(metrics.get("lmd_per_day", 0) or 0) / 10_265.4867256637
+        + float(metrics.get("exp_per_day", 0) or 0) / 8000.0
+        + float(metrics.get("gold_made_per_day", 0) or 0) / 20.0
+        + float(metrics.get("orundum_per_day", 0) or 0) / 240.0
+        + float(metrics.get("shards_made_per_day", 0) or 0) / 24.0
+    )
+    # Power stations matter through the drones already routed into the output
+    # metrics, so drones are not added as a separate resource here.
+    return score
+
+
 def public_valuation() -> dict:
     return {
         "unit": "sanity_equivalent_per_day",
