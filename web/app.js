@@ -198,6 +198,7 @@ $("optimizeButton").addEventListener("click", async () => {
     drone_target: $("droneTarget").value,
     schedule_mode: $("scheduleMode").value,
     lock_dorm_helper: $("lockDormHelper").checked,
+    enable_fiammetta: $("enableFiammetta").checked,
     shift_hours: +$("shiftHours").value,
     max_work_hours: +$("shiftHours").value,
     morale_floor: 1,
@@ -409,6 +410,8 @@ async function runQuickSimulation(result) {
 function renderMorale(m, rotation) {
   const helpers = (m.dorm_helpers || []).slice(0,4).map(x=>`${escapeHtml(x.operator)}（全体 +${x.all} / 单体 +${x.single}）`).join("、") || "当前 Box 无需专门配置";
   const locked=rotation?.dormitory?.locked_helper;
+  const fiammetta=rotation?.dormitory?.fiammetta;
+  const fiammettaAudit=rotation?.morale?.fiammetta;
   const rotationAudits=Object.entries(rotation?.morale?.teams||{});
   const slowest=rotationAudits.length ? Math.max(...rotationAudits.map(([,audit])=>+audit.slowest_recovery_hours||0)) : m.max_recovery_hours;
   const bedLedger=rotationAudits.length ? rotationAudits.map(([team,audit])=>`${team} ${audit.bed_hours_required}/${audit.bed_hours_available}`).join(" · ") : `${m.bed_hours_required} / ${m.bed_hours_available}`;
@@ -418,7 +421,7 @@ function renderMorale(m, rotation) {
     <div><span>两班最慢回满</span><strong>${slowest} 小时</strong></div>
     <div><span>A/B 所需 / 可用床位小时</span><strong>${bedLedger}</strong></div>
     <div><span>当前循环</span><strong>${sustainable ? "两队可持续" : "恢复不足"}</strong></div>
-  </div><p>${escapeHtml(rotation?.morale?.note || m.note)} 含 ${m.production_slots} 个产出岗位与 ${m.support_slots} 个辅助岗位；${m.owned_operators} 名干员相对最低 ${m.minimum_distinct_operators} 名的容量判断：${m.roster_capacity_ok ? "通过" : "不足"}。菲亚梅塔：${m.fiammetta_owned ? "已拥有" : "未拥有"}。</p><p>固定宿舍位：${locked ? `${escapeHtml(locked.name)}（群体 +${locked.all}/小时）` : "未启用"}。可用宿舍辅助前列：${helpers}</p>`;
+  </div><p>${escapeHtml(rotation?.morale?.note || m.note)} 含 ${m.production_slots} 个产出岗位与 ${m.support_slots} 个辅助岗位；${m.owned_operators} 名干员相对最低 ${m.minimum_distinct_operators} 名的容量判断：${m.roster_capacity_ok ? "通过" : "不足"}。</p><p>固定宿舍位：${locked ? `${escapeHtml(locked.name)}（群体 +${locked.all}/小时）` : "未启用"}。菲亚梅塔：${fiammetta?.active ? `恢复 ${escapeHtml(fiammetta.target_operator_name)}；A→B 后回满 ${fiammettaAudit.recover_during_b_hours}h，B→A 后回满 ${fiammettaAudit.recover_during_a_hours}h` : escapeHtml(fiammetta?.note || (m.fiammetta_owned ? "已拥有但本次未激活" : "机制支持，当前未拥有"))}。可用宿舍辅助前列：${helpers}</p>`;
 }
 
 $("simulateButton").addEventListener("click", async () => {

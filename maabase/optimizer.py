@@ -40,7 +40,10 @@ def _utility(candidate: dict, product: str, lmd_weight: float, gold_safety: floa
     return 0.0
 
 
-def _solve_pulp(candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float) -> tuple[dict, str] | None:
+def _solve_pulp(
+    candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float,
+    reusable_ids: set[str] | None = None,
+) -> tuple[dict, str] | None:
     try:
         import pulp
     except ImportError:
@@ -59,6 +62,15 @@ def _solve_pulp(candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_
             for i, candidate in enumerate(candidates[group.key])
             if op_id in candidate["operators"]
         ) <= 1
+    if reusable_ids:
+        # Fiammetta can refresh one configured target between non-overlapping
+        # rotation states.  The second team may therefore claim at most one
+        # operator already used by A, never an arbitrary number of overlaps.
+        problem += pulp.lpSum(
+            len(set(candidate["operators"]) & reusable_ids) * variables[(group.key, i)]
+            for group in groups
+            for i, candidate in enumerate(candidates[group.key])
+        ) <= 1
     problem += pulp.lpSum(
         _utility(candidate, group.key, lmd_weight, gold_safety) * variables[(group.key, i)]
         for group in groups
@@ -76,7 +88,10 @@ def _solve_pulp(candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_
     return selected, "CBC 候选集协调解"
 
 
-def _solve_beam(candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float, width: int = 4000) -> tuple[dict, str]:
+def _solve_beam(
+    candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float,
+    width: int = 4000, reusable_ids: set[str] | None = None,
+) -> tuple[dict, str]:
     # score, used operators, selected by product
     states: list[tuple[float, frozenset[str], dict[str, list[dict]]]] = [(0.0, frozenset(), {})]
     for group in groups:
@@ -87,6 +102,8 @@ def _solve_beam(candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_
                 for candidate in candidates[group.key]:
                     op_set = frozenset(candidate["operators"])
                     if used & op_set:
+                        continue
+                    if reusable_ids and len((used | op_set) & reusable_ids) > 1:
                         continue
                     new_selected = {key: list(value) for key, value in selected.items()}
                     new_selected.setdefault(group.key, []).append(candidate)
@@ -111,11 +128,14 @@ def _solve_beam(candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_
     return states[0][2], f"候选集协调搜索（宽度 {width}）"
 
 
-def _solve(candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float) -> tuple[dict, str]:
-    exact = _solve_pulp(candidates, groups, lmd_weight, gold_safety)
+def _solve(
+    candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float,
+    reusable_ids: set[str] | None = None,
+) -> tuple[dict, str]:
+    exact = _solve_pulp(candidates, groups, lmd_weight, gold_safety, reusable_ids)
     if exact:
         return exact
-    return _solve_beam(candidates, groups, lmd_weight, gold_safety)
+    return _solve_beam(candidates, groups, lmd_weight, gold_safety, reusable_ids=reusable_ids)
 
 
 def _metrics(
@@ -269,9 +289,12 @@ def _control_row(team: list[dict], context: BaseContext) -> dict | None:
     }
 
 
-def _support_rows(operators: list[dict], used: set[str], shift_hours: float) -> list[dict]:
+def _support_rows(
+    operators: list[dict], used: set[str], shift_hours: float, excluded_ids: set[str] | None = None,
+) -> list[dict]:
     """Choose reception/office workers without reusing production operators."""
-    available = [operator for operator in operators if operator["id"] not in used]
+    excluded_ids = excluded_ids or set()
+    available = [operator for operator in operators if operator["id"] not in used and operator["id"] not in excluded_ids]
 
     def skill_score(operator: dict, room: str) -> float:
         skills = [skill for skill in operator["skills"] if skill.get("room") == room]
@@ -407,6 +430,11 @@ def _cross_room_flows(
 def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dict:
     roster = payload.get("operators") or []
     operators = prepare_operators(roster, catalog)
+    reusable_ids = {str(operator_id) for operator_id in payload.get("_reusable_operator_ids", []) if operator_id}
+    fiammetta = next((operator for operator in operators if operator["id"] == "char_300_phenxi"), None)
+    fiammetta_enabled = bool(payload.get("enable_fiammetta", True)) and fiammetta is not None
+    if fiammetta_enabled:
+        operators = [operator for operator in operators if operator["id"] != fiammetta["id"]]
     lock_dorm_helper = bool(payload.get("lock_dorm_helper", True)) and not bool(payload.get("_rotation_internal"))
     dorm_helper = choose_dorm_helper(operators, str(payload.get("dorm_helper_id") or "")) if lock_dorm_helper else None
     if dorm_helper:
@@ -455,7 +483,8 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     # Compare production-distinct control-center states against the actual
     # downstream room solution.  On very large synthetic catalogs, retain the
     # former single-state path to keep regression runs laptop-friendly.
-    control_options = select_control_options(operators, base_context, 4 if len(operators) <= 180 else 1)
+    control_pool = [operator for operator in operators if operator["id"] not in reusable_ids]
+    control_options = select_control_options(control_pool, base_context, 4 if len(operators) <= 180 else 1)
     best_plan: tuple[float, list[dict], BaseContext, dict, str, dict] | None = None
     for control_team_option, context_option in control_options:
         control_ids = {operator["id"] for operator in control_team_option}
@@ -468,14 +497,31 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
         candidates_option: dict[str, list[dict]] = {}
         solver_option = ""
         for attempt in range(5):
-            candidates_option = {
-                group.key: generate_candidates(production_operators, group.key, catalog, keep, context_option)
-                for group in groups
-            }
+            candidates_option = {}
+            for group in groups:
+                values = generate_candidates(production_operators, group.key, catalog, keep, context_option)
+                if reusable_ids:
+                    # Preserve a complete no-reuse backbone.  Otherwise the
+                    # top candidate slice may be saturated by A-team stars and
+                    # become infeasible once the one-target constraint is added.
+                    no_reuse_pool = [operator for operator in production_operators if operator["id"] not in reusable_ids]
+                    values.extend(generate_candidates(no_reuse_pool, group.key, catalog, keep, context_option))
+                    unique = {tuple(candidate["operators"]): candidate for candidate in values}
+                    values = sorted(
+                        unique.values(),
+                        key=lambda candidate: (
+                            candidate.get("equivalent_efficiency", candidate["efficiency"]),
+                            candidate["confidence"] != "estimated",
+                        ),
+                        reverse=True,
+                    )[: keep * 2]
+                candidates_option[group.key] = values
             for group in groups:
                 if len(candidates_option[group.key]) < group.count:
                     raise ValueError(f"{group.key} 的候选组合不足")
-            selected_option, solver_option = _solve(candidates_option, groups, lmd_weight, gold_safety)
+            selected_option, solver_option = _solve(
+                candidates_option, groups, lmd_weight, gold_safety, reusable_ids
+            )
             count = platform_count(selected_option.get("power", []))
             factory_rooms = selected_option.get("gold", []) + selected_option.get("exp", []) + selected_option.get("shard", [])
             abyssal_count = sum(
@@ -513,7 +559,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     control_row = _control_row(control_team, context)
     occupied = {operator for values in selected.values() for room in values for operator in room.get("operators", [])}
     occupied.update(operator["id"] for operator in control_team)
-    auxiliary_rows = _support_rows(operators, occupied, base_context.shift_hours)
+    auxiliary_rows = _support_rows(operators, occupied, base_context.shift_hours, reusable_ids)
     result = {
         "solver": solver,
         "search_audit": {
@@ -540,6 +586,21 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
         "warnings": _warnings(selected, metrics),
         "morale": analyze_morale(_room_rows(selected), roster, catalog, payload.get("shift_hours", 8)),
         "dorm_helper": dorm_helper,
+        "fiammetta": {
+            "supported": True,
+            "owned": fiammetta is not None,
+            "enabled": fiammetta_enabled,
+            "active": False,
+            "operator_id": "char_300_phenxi",
+            "operator_name": "菲亚梅塔",
+            "target_operator_id": None,
+            "target_operator_name": None,
+            "note": (
+                "已预留菲亚梅塔宿舍位；生成 B 班时允许恰好一名 A 班生产干员作为换班点心情交换目标。"
+                if fiammetta_enabled else
+                "机制已支持；当前 Box 未拥有或用户已关闭，因此本次不激活。"
+            ),
+        },
         "frontier": [],
     }
     if coverage["partial_count"]:
@@ -562,14 +623,42 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
         }
         if dorm_helper:
             assigned_a.add(dorm_helper["id"])
+        if fiammetta_enabled:
+            assigned_a.add(fiammetta["id"])
+        production_a_ids = {
+            operator_id for room in result.get("rooms", []) for operator_id in room.get("operators", [])
+        }
+        reusable_a_ids = production_a_ids if fiammetta_enabled else set()
         remaining = [operator for operator in roster if operator.get("id") not in assigned_a]
+        if reusable_a_ids:
+            remaining.extend(operator for operator in roster if operator.get("id") in reusable_a_ids)
         if len(remaining) >= 21:
             second_payload = {
                 **payload, "operators": remaining, "include_rotation": False,
                 "_rotation_internal": True, "lock_dorm_helper": False,
                 "model_shift_hours": model_shift_hours_b,
+                "enable_fiammetta": False,
+                "_reusable_operator_ids": sorted(reusable_a_ids),
             }
             team_b = optimize(second_payload, catalog, include_frontier=False)
+            assigned_b = {
+                operator_id
+                for room in [*team_b.get("support_rooms", []), *team_b.get("rooms", [])]
+                for operator_id in room.get("operators", [])
+            }
+            reused = sorted(reusable_a_ids & assigned_b)
+            target_id = reused[0] if reused else None
+            target_name = next((operator.get("name") for operator in roster if operator.get("id") == target_id), None)
+            result["fiammetta"].update({
+                "active": bool(target_id),
+                "target_operator_id": target_id,
+                "target_operator_name": target_name,
+                "note": (
+                    f"菲亚梅塔固定恢复 {target_name}；该干员可出现在不重叠的 A/B 时间状态，交换后按菲亚梅塔 6 心情/小时重新充满。"
+                    if target_id else
+                    "已预留菲亚梅塔，但扩大候选搜索后没有任何 A 班目标进入紧接着的 B 班能提高方案，本循环不执行心情交换。"
+                ),
+            })
             result["rotation"] = build_rotation(
                 result, team_b, float(payload.get("max_work_hours", payload.get("shift_hours", 8))),
                 schedule_mode=str(payload.get("schedule_mode", "morale_aware")),
@@ -577,6 +666,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 morale_floor=float(payload.get("morale_floor", 1)),
                 max_work_hours=float(payload.get("max_work_hours", payload.get("shift_hours", 24))),
                 dorm_helper=dorm_helper,
+                fiammetta=result["fiammetta"],
             )
             # Time-dependent skills were ranked using a provisional duration.
             # Re-run the whole A/B construction at the duration produced by the

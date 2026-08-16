@@ -63,14 +63,21 @@ def _duration_options(team: dict, collection_hours: float, morale_floor: float, 
     return options or [limit]
 
 
-def _recovery_audit(team: dict, work_hours: float, rest_hours: float, dorm_helper: dict | None) -> dict:
+def _recovery_audit(
+    team: dict, work_hours: float, rest_hours: float, dorm_helper: dict | None,
+    fiammetta: dict | None = None,
+) -> dict:
     """Audit one team's recovery with a persistent helper occupying one dorm bed.
 
     An all-dorm recovery skill affects the other four beds in that dorm.  The
     four workers with the largest recovery demand are assigned there; all other
     workers use ordinary max-level beds and may leave as soon as they are full.
     """
-    rates = [rate for room in _all_rooms(team) for rate in _morale_rates(room).values()]
+    instant_target = str((fiammetta or {}).get("target_operator_id") or "") if (fiammetta or {}).get("active") else ""
+    rates = [
+        rate for room in _all_rooms(team) for operator_id, rate in _morale_rates(room).items()
+        if operator_id != instant_target
+    ]
     spent = sorted((rate * work_hours for rate in rates), reverse=True)
     all_bonus = max(0.0, float((dorm_helper or {}).get("all", 0) or 0))
     boosted_slots = min(4, len(spent)) if dorm_helper and all_bonus > 0 else 0
@@ -78,7 +85,8 @@ def _recovery_audit(team: dict, work_hours: float, rest_hours: float, dorm_helpe
         value / (BASE_RECOVERY_PER_HOUR + (all_bonus if index < boosted_slots else 0.0))
         for index, value in enumerate(spent)
     ]
-    beds = 19 if dorm_helper else 20
+    reserved_beds = int(bool(dorm_helper)) + int(bool((fiammetta or {}).get("enabled")))
+    beds = 20 - reserved_beds
     required = sum(recovery_times)
     slowest = max(recovery_times, default=0.0)
     available = beds * rest_hours
@@ -92,6 +100,41 @@ def _recovery_audit(team: dict, work_hours: float, rest_hours: float, dorm_helpe
         "boosted_beds": boosted_slots,
         "boosted_recovery_per_hour": round(BASE_RECOVERY_PER_HOUR + all_bonus, 3),
         "feasible": slowest <= rest_hours + 1e-9 and required <= available + 1e-9,
+    }
+
+
+def _operator_morale_rate(team: dict, operator_id: str) -> float:
+    return next(
+        (rates[operator_id] for room in _all_rooms(team) if operator_id in (rates := _morale_rates(room))),
+        0.0,
+    )
+
+
+def _fiammetta_audit(
+    team_a: dict, team_b: dict, durations: dict[str, float], fiammetta: dict | None,
+) -> dict:
+    if not (fiammetta or {}).get("active"):
+        return {"active": False, "feasible": True}
+    target_id = str(fiammetta["target_operator_id"])
+    spent_a = _operator_morale_rate(team_a, target_id) * durations["A"]
+    spent_b = _operator_morale_rate(team_b, target_id) * durations["B"]
+    # Self-recovery is max-dorm 4/h plus Fiammetta's isolated +2/h.  After a
+    # swap she inherits the target's ending morale, so her missing morale is
+    # exactly what the target spent in the preceding shift.
+    recovery_rate = 6.0
+    recover_after_a = spent_a / recovery_rate
+    recover_after_b = spent_b / recovery_rate
+    feasible = recover_after_a <= durations["B"] + 1e-9 and recover_after_b <= durations["A"] + 1e-9
+    return {
+        "active": True,
+        "target_operator_id": target_id,
+        "target_operator_name": fiammetta.get("target_operator_name"),
+        "self_recovery_per_hour": recovery_rate,
+        "target_spent_in_a": round(spent_a, 3),
+        "target_spent_in_b": round(spent_b, 3),
+        "recover_during_b_hours": round(recover_after_a, 3),
+        "recover_during_a_hours": round(recover_after_b, 3),
+        "feasible": feasible,
     }
 
 
@@ -113,6 +156,7 @@ def _choose_durations(
     floor: float,
     maximum: float,
     dorm_helper: dict | None,
+    fiammetta: dict | None,
 ) -> tuple[dict[str, float], str]:
     """Choose a sustainable unequal cycle so the stronger team works longer."""
     options = {
@@ -123,9 +167,11 @@ def _choose_durations(
     best: tuple[float, float, float, float] | None = None
     for a_hours in options["A"]:
         for b_hours in options["B"]:
-            audit_a = _recovery_audit(team_a, a_hours, b_hours, dorm_helper)
-            audit_b = _recovery_audit(team_b, b_hours, a_hours, dorm_helper)
-            if not (audit_a["feasible"] and audit_b["feasible"]):
+            trial_durations = {"A": a_hours, "B": b_hours}
+            audit_a = _recovery_audit(team_a, a_hours, b_hours, dorm_helper, fiammetta)
+            audit_b = _recovery_audit(team_b, b_hours, a_hours, dorm_helper, fiammetta)
+            instant_audit = _fiammetta_audit(team_a, team_b, trial_durations, fiammetta)
+            if not (audit_a["feasible"] and audit_b["feasible"] and instant_audit["feasible"]):
                 continue
             cycle = a_hours + b_hours
             weighted = (scores["A"] * a_hours + scores["B"] * b_hours) / cycle
@@ -292,6 +338,7 @@ def build_rotation(
     max_work_hours: float | None = None,
     horizon_hours: float | None = None,
     dorm_helper: dict | None = None,
+    fiammetta: dict | None = None,
 ) -> dict:
     """Build a two-team schedule and a room-centric event timeline.
 
@@ -304,7 +351,9 @@ def build_rotation(
     floor = max(0.0, min(23.0, float(morale_floor)))
     teams = {"A": team_a, "B": team_b}
     if schedule_mode == "morale_aware":
-        durations, duration_reason = _choose_durations(team_a, team_b, collection, floor, maximum, dorm_helper)
+        durations, duration_reason = _choose_durations(
+            team_a, team_b, collection, floor, maximum, dorm_helper, fiammetta
+        )
     else:
         if requested not in {8.0, 12.0}:
             raise ValueError("固定轮班目前支持 8 小时或 12 小时")
@@ -352,10 +401,11 @@ def build_rotation(
         index += 1
 
     recovery_audit = {
-        "A": _recovery_audit(team_a, durations["A"], durations["B"], dorm_helper),
-        "B": _recovery_audit(team_b, durations["B"], durations["A"], dorm_helper),
+        "A": _recovery_audit(team_a, durations["A"], durations["B"], dorm_helper, fiammetta),
+        "B": _recovery_audit(team_b, durations["B"], durations["A"], dorm_helper, fiammetta),
     }
-    feasible = all(audit["feasible"] for audit in recovery_audit.values())
+    fiammetta_audit = _fiammetta_audit(team_a, team_b, durations, fiammetta)
+    feasible = all(audit["feasible"] for audit in recovery_audit.values()) and fiammetta_audit["feasible"]
 
     room_order = {"control": 0, "trade": 1, "orundum": 2, "gold": 3, "exp": 4,
                   "shard": 5, "power": 6, "reception": 7, "office": 8}
@@ -374,12 +424,15 @@ def build_rotation(
         "production_curve": _production_curve(teams, durations),
         "dormitory": {
             "locked_helper": dorm_helper,
+            "fiammetta": fiammetta,
             "note": (f"固定 {dorm_helper['name']} 驻一间宿舍；占用 1 个床位，并使同宿舍其余 4 个床位恢复 +{dorm_helper.get('all', 0):g}/小时。"
                      if dorm_helper else "未锁定宿舍恢复干员。"),
         },
         "morale": {
-            "feasible": feasible, "beds": 19 if dorm_helper else 20,
+            "feasible": feasible,
+            "beds": 20 - int(bool(dorm_helper)) - int(bool((fiammetta or {}).get("enabled"))),
             "base_recovery_per_hour": BASE_RECOVERY_PER_HOUR, "teams": recovery_audit,
+            "fiammetta": fiammetta_audit,
             "note": (f"换班仅落在每 {collection:g} 小时统一收取节点；每队尽量工作至心情 {floor:g} 前，"
                      f"且连续在岗不超过 {maximum:g} 小时。{duration_reason}。{(dorm_helper or {}).get('name', '未锁定干员')}"
                      f"{' 驻宿舍并计入恢复' if dorm_helper else '；仅使用基础恢复'}。"

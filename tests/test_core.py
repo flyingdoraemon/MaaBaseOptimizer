@@ -138,6 +138,25 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(rotation["pattern"], ["A", "B"])
         self.assertEqual(rotation["production_curve"]["points"][-1]["cumulative"]["lmd_per_day"], 20000)
 
+    def test_fiammetta_recovery_is_a_time_state_not_a_roster_exception(self):
+        def team(label):
+            room = {"key": "gold", "room": "赤金制造站 1", "operators": ["target"], "names": ["高效目标"],
+                    "details": [{"operator": "高效目标", "skills": []}], "efficiency": 0,
+                    "multiplier": 1.01, "time_profiles": []}
+            return {"rooms": [room], "support_rooms": [], "metrics": {"lmd_per_day": 0,
+                    "exp_per_day": 0, "gold_made_per_day": 20.2, "gold_used_per_day": 0,
+                    "gold_net_per_day": 20.2, "gold_inventory": 0}}
+        rotation = build_rotation(
+            team("A"), team("B"), 12, schedule_mode="fixed",
+            fiammetta={"enabled": True, "active": True, "target_operator_id": "target",
+                        "target_operator_name": "高效目标"},
+        )
+        audit = rotation["morale"]["fiammetta"]
+        self.assertTrue(audit["active"])
+        self.assertTrue(audit["feasible"])
+        self.assertEqual(audit["self_recovery_per_hour"], 6)
+        self.assertEqual(rotation["morale"]["beds"], 19)
+
     def test_catnip_formula_types_and_control_speed_are_real_speed(self):
         raw = [
             {"id": "char_4077_palico", "name": "泰拉大陆调查团", "elite": 0, "level": 30},
