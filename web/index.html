@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Maa Base Optimizer</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">ARKNIGHTS · RIIC</p>
+      <h1>基建排班实验室</h1>
+      <p class="lead">用你的干员练度做跨设施排班，并把龙门币、经验与赤金收支摆在同一张图上。</p>
+    </div>
+    <div class="status"><span class="dot"></span><span id="catalogStatus">载入技能数据…</span></div>
+  </header>
+
+  <main>
+    <section class="panel setup compact-setup">
+      <div class="section-title">
+        <div><span class="step">01</span><h2>干员 Box</h2></div>
+        <p>这里只维护技能解锁阶段；等级不参与基建排班展示。</p>
+      </div>
+      <div class="toolbar">
+        <button class="primary" id="sklandButton">扫码更新干员列表</button>
+        <button class="primary" id="importButton">导入 MAA 识别结果</button>
+        <input id="fileInput" type="file" accept="application/json,.json" hidden>
+        <div class="operator-add">
+          <input id="operatorSearch" list="operatorList" placeholder="输入干员名称">
+          <datalist id="operatorList"></datalist>
+          <button id="addButton">添加 E2</button>
+        </div>
+        <button class="quiet" id="saveButton">保存到本机</button>
+        <button class="quiet danger" id="clearButton">清空</button>
+      </div>
+      <div id="importMessage" class="message hidden"></div>
+      <details class="roster-drawer">
+        <summary><span><strong id="rosterCount">0</strong> 名干员已载入</span><small>展开查看或修改精英阶段</small></summary>
+        <div class="roster-table-wrap">
+          <table class="roster-table">
+            <thead><tr><th>干员</th><th>精英阶段</th><th></th></tr></thead>
+            <tbody id="rosterBody"><tr><td colspan="3" class="empty">尚未导入干员</td></tr></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+
+    <dialog id="sklandDialog" class="skland-dialog">
+      <div class="dialog-head">
+        <div><p class="eyebrow">SKLAND SYNC</p><h2>扫码更新干员 Box</h2></div>
+        <button class="quiet" id="closeSklandButton" aria-label="关闭">关闭</button>
+      </div>
+      <p class="dialog-copy">请使用森空岛 App 扫描并确认授权。二维码两分钟内有效；凭据只保存在本次应用进程的内存中，导入后立即清除。</p>
+      <div class="qr-wrap"><img id="sklandQr" alt="鹰角扫码登录二维码"><div id="qrPlaceholder">正在生成二维码…</div></div>
+      <div id="sklandMessage" class="message">正在连接鹰角登录服务…</div>
+      <label id="accountPicker" class="account-picker hidden"><span>选择明日方舟角色</span><select id="sklandAccount"></select></label>
+      <button id="confirmSklandButton" class="optimize hidden">导入并保存此角色的干员列表</button>
+      <button id="retrySklandButton" class="quiet hidden">重新生成二维码</button>
+    </dialog>
+
+    <section class="panel controls">
+      <div class="section-title">
+        <div><span class="step">02</span><h2>生产目标</h2></div>
+        <p>先选择真实房间布局，再指定制造与贸易产品；程序生成两队循环排班。</p>
+      </div>
+      <div class="control-grid">
+        <label><span>左侧房间布局</span>
+          <select id="baseLayout">
+            <option value="243">2-4-3（当前布局）</option>
+            <option value="153">1-5-3</option>
+            <option value="333">3-3-3</option>
+          </select>
+        </label>
+        <label><span>作战记录制造站</span><select id="expFactories"></select><small id="goldFactoryHint"></small></label>
+        <label><span>源石碎片制造站</span><select id="shardFactories"></select><small>其余制造站自动分配给赤金</small></label>
+        <label><span>源石订单贸易站</span><select id="orundumTrades"></select><small>其余贸易站自动使用龙门商法</small></label>
+        <label><span>源石碎片配方</span><select id="shardRecipe"><option value="rock">固源岩：2 个 + 1600 龙门币</option><option value="device">装置：1 个 + 1000 龙门币</option></select></label>
+        <label><span>无人机用途</span>
+          <select id="droneTarget">
+            <option value="trade">贸易站订单</option>
+            <option value="gold">赤金制造</option>
+            <option value="exp">作战记录制造</option>
+            <option value="shard">源石碎片制造</option>
+            <option value="orundum">源石订单</option>
+            <option value="none">不计入</option>
+          </select>
+        </label>
+        <label><span>轮班策略</span>
+          <select id="scheduleMode"><option value="morale_aware">心情阈值 + 收取节点</option><option value="fixed">固定时长（对照）</option></select>
+        </label>
+        <label><span>最长连续工作</span>
+          <select id="shiftHours"><option value="24">最多 24 小时</option><option value="16">最多 16 小时</option><option value="12">最多 12 小时</option><option value="8">最多 8 小时</option></select>
+          <small>心情模式会在上限前的最后一次收取时换班</small>
+        </label>
+        <label><span>统一收取制造 / 贸易</span>
+          <select id="collectionInterval"><option value="8">每 8 小时</option><option value="4">每 4 小时</option><option value="12">每 12 小时</option></select>
+        </label>
+        <label><span>每日任务等赤金 / 日</span>
+          <input id="dailyGold" type="number" min="0" max="999" step="1" value="0" placeholder="例如 5">
+          <small>不确定时留 0；作为制造站之外的稳定流入</small>
+        </label>
+        <label><span>每周任务等赤金 / 周</span>
+          <input id="weeklyGold" type="number" min="0" max="9999" step="1" value="0" placeholder="例如 20">
+          <small>计算时自动除以 7，活动奖励可折算后填写</small>
+        </label>
+        <label><span>当前赤金库存</span>
+          <input id="goldInventory" type="number" min="0" max="9999999" step="1" value="0" placeholder="用于估算可维持天数">
+          <small>用于库存预测；排班期望默认已有足够周转库存</small>
+        </label>
+        <label><span>当前源石碎片库存</span>
+          <input id="shardInventory" type="number" min="0" max="9999999" step="1" value="0" placeholder="不制造合成玉可留 0">
+          <small>不会把制造站从零启动误当成贸易站必须停工</small>
+        </label>
+      </div>
+      <button class="optimize" id="optimizeButton">计算候选集排班</button>
+      <div id="solveMessage" class="message hidden"></div>
+    </section>
+
+    <section id="results" class="results hidden">
+      <div class="result-heading">
+        <div><span class="step">03</span><h2>推荐方案</h2></div>
+        <span id="solverBadge" class="badge"></span>
+      </div>
+      <div class="monitor-layout">
+        <div class="monitor-main">
+          <div class="kpis">
+            <article class="kpi-primary"><span>龙门币 / 日</span><strong id="lmdKpi">—</strong><small>贸易站解析期望</small></article>
+            <article><span>作战经验 / 日</span><strong id="expKpi">—</strong><small>制造站解析期望</small></article>
+            <article><span>赤金总净流量 / 日</span><strong id="goldKpi">—</strong><small id="goldKpiNote">含外部来源</small></article>
+            <article><span>无人机 / 日</span><strong id="droneKpi">—</strong><small id="droneKpiNote">发电站合计</small></article>
+          </div>
+          <article class="panel production-console">
+            <div class="console-head"><div><p class="eyebrow">LIVE PRODUCTION</p><h3>每日生产监控</h3></div><span class="live-pill"><i></i>解析期望</span></div>
+            <div id="productionMonitor" class="production-monitor"></div>
+          </article>
+          <article class="panel rotation-panel">
+            <div class="console-head"><div><p class="eyebrow">48H ROOM SCHEDULE</p><h3>房间轮换运行图</h3></div><span id="rotationPattern" class="live-pill">等待排程</span></div>
+            <div id="shiftStrip" class="shift-strip"></div>
+            <div class="timeline-legend"><span><i class="work-a"></i>A 班驻场</span><span><i class="work-b"></i>B 班驻场</span><span><i class="collect"></i>统一收取</span></div>
+            <div id="operatorTimeline" class="operator-timeline"></div>
+          </article>
+          <article class="panel chart-panel resource-chart"><h3>资源吞吐对比</h3><div id="barChart" class="bar-chart"></div></article>
+          <div id="warnings" class="warnings"></div>
+          <article id="moraleAudit" class="panel morale-audit"></article>
+          <div class="room-section-head"><div><p class="eyebrow">ASSIGNMENT</p><h3>设施排班</h3></div><span>同一干员全局去重</span></div>
+          <div id="rooms" class="team-rooms"></div>
+        </div>
+        <aside class="monitor-sidebar">
+          <article class="panel side-card gold-monitor-card">
+            <div class="side-title"><span class="side-icon gold-icon">Au</span><div><small>INVENTORY FLOW</small><h3>赤金库存</h3></div></div>
+            <div id="goldMonitor"></div>
+          </article>
+          <article class="panel side-card">
+            <div class="side-title"><span class="side-icon state-icon">⇄</span><div><small>CROSS-ROOM BUS</small><h3>跨房间状态</h3></div></div>
+            <div id="crossRoomPanel" class="state-flows"></div>
+          </article>
+          <article class="panel side-card">
+            <div class="side-title"><span class="side-icon sim-icon">▶</span><div><small>FAST FORWARD</small><h3>模拟校准</h3></div></div>
+            <div id="quickSimulation" class="quick-simulation"><p>计算方案后自动快进 30 天，校验解析期望。</p></div>
+          </article>
+        </aside>
+      </div>
+      <article class="panel simulator-panel">
+        <div class="section-title"><div><span class="step">04</span><h2>快进验证</h2></div><p>逐笔生成贸易订单，检查长期模拟是否收敛到解析期望。</p></div>
+        <div class="sim-controls">
+          <label><span>快进天数</span><input id="simDays" type="number" min="1" max="365" value="30"></label>
+          <label><span>随机试验次数</span><input id="simTrials" type="number" min="100" max="5000" step="100" value="1000"></label>
+          <button id="simulateButton">开始快进模拟</button>
+        </div>
+        <div id="simulateMessage" class="message hidden"></div>
+        <div id="simulationResult" class="simulation-result hidden"></div>
+      </article>
+    </section>
+
+    <section class="method">
+      <h2>结果应当怎样理解？</h2>
+      <p>运行图按房间展示两套互斥班组。心情模式会让当前班尽量连续工作，并把换班对齐到制造站与贸易站的统一收取节点；离岗后按宿舍床位小时审计恢复。当前求解只保证截断候选集内的房间协调，不是对两班、恢复和完整时间轴联合求解后的全局最优证明。</p>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

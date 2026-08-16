@@ -1,0 +1,17 @@
+{
+  "details": {
+    "done": true,
+    "own_opers": [
+      {
+        "id": "char_002_amiya",
+        "name": "阿米娅",
+        "own": true,
+        "elite": 2,
+        "level": 50,
+        "potential": 6,
+        "rarity": 5
+      }
+    ]
+  }
+}
+
