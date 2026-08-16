@@ -300,7 +300,7 @@ def generate_candidates(operators: list[dict], product: str, catalog: dict, keep
         else:
             neutral.append(operator)
     ranked.sort(key=lambda x: x[0], reverse=True)
-    pool_limit = 34 if product != "power" else 28
+    pool_limit = 42 if product != "power" else 32
     pool = [x[1] for x in ranked[:pool_limit]] + neutral[: min(6, max(0, pool_limit - len(ranked)))]
     size = 1 if product == "power" else 3
     if len(pool) < size:
@@ -313,7 +313,14 @@ def generate_candidates(operators: list[dict], product: str, catalog: dict, keep
     # Pure top-N truncation is unsafe for set packing: the first hundred teams may
     # all contain the same superstar. Preserve several greedily disjoint chains so
     # later rooms always have competitive alternatives.
-    retained = list(candidates[: max(30, keep // 2)])
+    retained = list(candidates[: max(60, keep // 2)])
+    # Keep the best representative containing every relevant pool operator.
+    # This prevents a small set of superstars from erasing strong second-team
+    # alternatives before the global set-packing solver can see them.
+    for operator in pool:
+        representative = next((candidate for candidate in candidates if operator["id"] in candidate["operators"]), None)
+        if representative:
+            retained.append(representative)
     for seed in candidates[: min(48, len(candidates))]:
         current = seed
         used: set[str] = set()

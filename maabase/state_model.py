@@ -82,6 +82,32 @@ class BaseContext:
         return asdict(self)
 
 
+CONTROL_PRODUCTION_ICONS = {
+    "bskill_ctrl_t_spd", "bskill_ctrl_p_spd", "bskill_ctrl_cost_felyne", "bskill_ctrl_felyne",
+    "bskill_ctrl_aegir2", "bskill_ctrl_aegir", "bskill_ctrl_cost_bd1", "bskill_ctrl_cost_bd1&bd2",
+    "bskill_ctrl_cost_bd2", "bskill_ctrl_cost_bd3", "bskill_ctrl_dorm_uika1", "bskill_ctrl_hire_tmoris",
+    "bskill_ctrl_meet_amoris1", "bskill_ctrl_trade_mortis", "bskill_ctrl_p_oblvns",
+}
+
+
+def _control_candidates(operators: list[dict]) -> list[dict]:
+    """Retain every modeled state producer plus a few morale-only fillers.
+
+    A full catalog currently has dozens of control-room operators; blindly
+    enumerating C(65, 5) teams spends minutes rediscovering equivalent
+    morale-only states.  Production-state producers are never truncated.
+    """
+    candidates = [op for op in operators if any(skill.get("room") == "CONTROL" for skill in op["skills"])]
+    producers = [op for op in candidates if op["icons"] & CONTROL_PRODUCTION_ICONS]
+    producer_ids = {op["id"] for op in producers}
+    fillers = [op for op in candidates if op["id"] not in producer_ids]
+    fillers.sort(key=lambda op: sum(
+        "心情" in str(skill.get("description") or "")
+        for skill in op["skills"] if skill.get("room") == "CONTROL"
+    ), reverse=True)
+    return producers + fillers[: max(0, 20 - len(producers))]
+
+
 def _control_effect(team: tuple[dict, ...], context: BaseContext) -> tuple[float, BaseContext]:
     result = BaseContext(**{**asdict(context), "audit": list(context.audit)})
     icons = {icon for operator in team for icon in operator["icons"]}
@@ -140,7 +166,7 @@ def _control_effect(team: tuple[dict, ...], context: BaseContext) -> tuple[float
     score += result.catnip * 0.5 + result.abyssal_factory_percent_per_hunter * 0.25
     return score, result
 def select_control_team(operators: list[dict], context: BaseContext) -> tuple[list[dict], BaseContext]:
-    candidates = [op for op in operators if any(skill.get("room") == "CONTROL" for skill in op["skills"])]
+    candidates = _control_candidates(operators)
     if not candidates:
         return [], context
     size = min(5, len(candidates))
@@ -176,7 +202,7 @@ def select_control_options(
     optimizer can compare their *actual* downstream output instead of choosing
     a control team from an isolated heuristic score.
     """
-    candidates = [op for op in operators if any(skill.get("room") == "CONTROL" for skill in op["skills"])]
+    candidates = _control_candidates(operators)
     if not candidates:
         return [([], context)]
     size = min(5, len(candidates))

@@ -46,6 +46,22 @@ def _dorm_skill(skill: dict, operator: str) -> dict | None:
     }
 
 
+def choose_dorm_helper(operators: list[dict], preferred_id: str | None = None) -> dict | None:
+    """Choose one persistent all-dorm recovery helper from prepared operators."""
+    choices = []
+    for operator in operators:
+        for skill in operator.get("skills", []):
+            parsed = _dorm_skill(skill, operator["name"])
+            if not parsed or parsed["all"] <= 0:
+                continue
+            choices.append({"id": operator["id"], "name": operator["name"], **parsed})
+    if preferred_id:
+        preferred = next((item for item in choices if item["id"] == preferred_id), None)
+        if preferred:
+            return preferred
+    return max(choices, key=lambda item: (item["all"], item["single"], item["self"]), default=None)
+
+
 def _work_rates(rooms: list[dict]) -> dict[str, float]:
     rates: dict[str, float] = {}
     for room in rooms:

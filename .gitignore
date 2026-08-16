@@ -1,7 +1,16 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.coverage
+.ruff_cache/
 .DS_Store
+._*
+.AppleDouble
+.LSOverride
+Icon?
+.Spotlight-V100/
+.Trashes/
 data/generated/
 data/user_roster.json
 reports/

@@ -62,11 +62,13 @@ def simulate(payload: dict) -> dict:
             elapsed = 0.0
             multiplier = float(room.get("multiplier", 1.0))
             distribution = room["trade"]["distribution"]
-            quality = room["trade"].get("quality_warmup") or {}
-            shift_minutes = float(quality.get("shift_hours") or 0) * 60.0
             while True:
-                work_minutes = elapsed % shift_minutes if shift_minutes > 0 else elapsed
-                order = _draw_order(rng, _warm_distribution(distribution, quality, work_minutes))
+                # The analytical layer stores the already integrated
+                # shift-average distribution.  Replay that same distribution
+                # here; applying the warm-up curve a second, order-start-weighted
+                # way creates a systematic 3–5% mismatch that more trials can
+                # never remove.
+                order = _draw_order(rng, distribution)
                 elapsed += float(order["minutes"]) / multiplier
                 if elapsed > horizon:
                     break
@@ -141,7 +143,7 @@ def simulate(payload: dict) -> dict:
         "贸易站逐笔随机生成订单；制造站按完整产品离散结算。",
         f"制造站与贸易站按每 {collection_hours:g} 小时同一节点结算库存；排班期望假设开班已有足够周转库存，不做从零启动串行阻塞。",
         "心情耗尽与恢复由排班器审计；本随机层只重放在岗期间的产品和订单。",
-        "订单品质在每笔订单开始时按累计工作时间取样；换班时重置，峰值前采用 PRTS 峰值时间约束下的线性曲线。",
+        "订单品质先按班内线性暖机曲线积分成班均分布；快进与解析层重放同一分布，换班时重新开始暖机。",
         "无人机按期望模型的同一目标折算为额外倒计时时间。",
     ]
     if any("平均空位" in note for room in rooms for note in room.get("mechanic_notes", [])):

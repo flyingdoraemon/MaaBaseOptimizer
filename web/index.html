@@ -89,6 +89,10 @@
         <label><span>轮班策略</span>
           <select id="scheduleMode"><option value="morale_aware">心情阈值 + 收取节点</option><option value="fixed">固定时长（对照）</option></select>
         </label>
+        <label class="check-control"><span>宿舍固定恢复位</span>
+          <span><input id="lockDormHelper" type="checkbox" checked> 自动锁定 1 名群体恢复干员</span>
+          <small>该干员不再进入生产；按占用 1 张床、强化同宿舍其余 4 张床计算</small>
+        </label>
         <label><span>最长连续工作</span>
           <select id="shiftHours"><option value="24">最多 24 小时</option><option value="16">最多 16 小时</option><option value="12">最多 12 小时</option><option value="8">最多 8 小时</option></select>
           <small>心情模式会在上限前的最后一次收取时换班</small>
@@ -135,10 +139,16 @@
             <div id="productionMonitor" class="production-monitor"></div>
           </article>
           <article class="panel rotation-panel">
-            <div class="console-head"><div><p class="eyebrow">48H ROOM SCHEDULE</p><h3>房间轮换运行图</h3></div><span id="rotationPattern" class="live-pill">等待排程</span></div>
+            <div class="console-head"><div><p class="eyebrow">ONE UNIQUE CYCLE</p><h3>房间轮换运行图</h3></div><span id="rotationPattern" class="live-pill">等待排程</span></div>
             <div id="shiftStrip" class="shift-strip"></div>
             <div class="timeline-legend"><span><i class="work-a"></i>A 班驻场</span><span><i class="work-b"></i>B 班驻场</span><span><i class="collect"></i>统一收取</span></div>
             <div id="operatorTimeline" class="operator-timeline"></div>
+          </article>
+          <article class="panel yield-curve-panel">
+            <div class="console-head"><div><p class="eyebrow">24H YIELD TRACE</p><h3>24 小时收益与实时速率</h3></div>
+              <label class="curve-picker"><span>查看资源</span><select id="curveMetric"><option value="lmd_per_day">龙门币</option><option value="exp_per_day">作战经验</option><option value="gold_net_per_day">赤金净流量</option><option value="gold_made_per_day">赤金制造</option><option value="gold_used_per_day">赤金消耗</option><option value="orundum_per_day">合成玉</option><option value="drones_per_day">无人机</option></select></label>
+            </div>
+            <div id="yieldCurve" class="yield-curve"></div>
           </article>
           <article class="panel chart-panel resource-chart"><h3>资源吞吐对比</h3><div id="barChart" class="bar-chart"></div></article>
           <div id="warnings" class="warnings"></div>
@@ -175,7 +185,7 @@
 
     <section class="method">
       <h2>结果应当怎样理解？</h2>
-      <p>运行图按房间展示两套互斥班组。心情模式会让当前班尽量连续工作，并把换班对齐到制造站与贸易站的统一收取节点；离岗后按宿舍床位小时审计恢复。当前求解只保证截断候选集内的房间协调，不是对两班、恢复和完整时间轴联合求解后的全局最优证明。</p>
+      <p>运行图只展示一个不重复的 A→B 循环。心情模式枚举所有允许的收取节点，在可持续恢复的前提下让高产班组承担更长工时；离岗后按宿舍床位小时及固定恢复位审计。当前求解只保证扩大候选集内的房间协调，不声称完整游戏状态下的全局最优。</p>
     </section>
   </main>
   <script src="/app.js"></script>

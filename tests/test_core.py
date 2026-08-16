@@ -118,9 +118,25 @@ class CoreTests(unittest.TestCase):
             return {"rooms": [room], "support_rooms": [], "metrics": {"lmd_per_day": 0, "exp_per_day": 0,
                     "gold_net_per_day": 0, "gold_inventory": 0}}
         rotation = build_rotation(team("a", "A干员"), team("b", "B干员"), 8)
-        self.assertEqual(rotation["pattern"], ["A", "B", "A", "B", "A", "B"])
+        self.assertEqual(rotation["pattern"], ["A", "B"])
+        self.assertEqual(rotation["cycle_hours"], 16)
         self.assertTrue(rotation["morale"]["feasible"])
         self.assertEqual({row["id"] for row in rotation["operators"]}, {"a", "b"})
+
+    def test_morale_schedule_gives_stronger_team_more_time_and_builds_curve(self):
+        def team(operator_id, lmd):
+            room = {"key": "power", "room": "发电站 1", "operators": [operator_id], "names": [operator_id],
+                    "details": [{"operator": operator_id, "skills": []}], "efficiency": 0, "time_profiles": []}
+            return {"rooms": [room], "support_rooms": [], "metrics": {"lmd_per_day": lmd,
+                    "exp_per_day": 0, "gold_made_per_day": 0, "gold_net_per_day": 0,
+                    "gold_inventory": 0}}
+        rotation = build_rotation(
+            team("strong", 24000), team("relief", 12000), 24,
+            schedule_mode="morale_aware", collection_interval_hours=8, max_work_hours=24,
+        )
+        self.assertEqual(rotation["team_work_hours"], {"A": 16, "B": 8})
+        self.assertEqual(rotation["pattern"], ["A", "B"])
+        self.assertEqual(rotation["production_curve"]["points"][-1]["cumulative"]["lmd_per_day"], 20000)
 
     def test_catnip_formula_types_and_control_speed_are_real_speed(self):
         raw = [

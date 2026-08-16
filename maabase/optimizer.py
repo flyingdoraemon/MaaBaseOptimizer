@@ -8,7 +8,7 @@ import itertools
 from typing import Any
 
 from .model import generate_candidates, prepare_operators
-from .morale import analyze_morale
+from .morale import analyze_morale, choose_dorm_helper
 from .scheduler import build_rotation
 from .state_model import (
     ABYSSAL_HUNTER_IDS,
@@ -76,7 +76,7 @@ def _solve_pulp(candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_
     return selected, "CBC 候选集协调解"
 
 
-def _solve_beam(candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float, width: int = 1800) -> tuple[dict, str]:
+def _solve_beam(candidates: dict[str, list[dict]], groups: list[GroupSpec], lmd_weight: float, gold_safety: float, width: int = 4000) -> tuple[dict, str]:
     # score, used operators, selected by product
     states: list[tuple[float, frozenset[str], dict[str, list[dict]]]] = [(0.0, frozenset(), {})]
     for group in groups:
@@ -407,8 +407,12 @@ def _cross_room_flows(
 def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dict:
     roster = payload.get("operators") or []
     operators = prepare_operators(roster, catalog)
+    lock_dorm_helper = bool(payload.get("lock_dorm_helper", True)) and not bool(payload.get("_rotation_internal"))
+    dorm_helper = choose_dorm_helper(operators, str(payload.get("dorm_helper_id") or "")) if lock_dorm_helper else None
+    if dorm_helper:
+        operators = [operator for operator in operators if operator["id"] != dorm_helper["id"]]
     if len(operators) < 21:
-        raise ValueError("左侧产出设施的一班需要 21 个不同干员；当前有效干员数量不足")
+        raise ValueError("预留宿舍恢复位后，左侧产出设施的一班需要 21 个不同干员；当前有效干员数量不足")
     layouts = {"243": (2, 4, 3), "153": (1, 5, 3), "333": (3, 3, 3)}
     layout_key = str(payload.get("base_layout", "243"))
     if layout_key not in layouts:
@@ -423,12 +427,13 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     lmd_weight = 0.5
     gold_safety = 0.0
     shard_recipe = "device" if payload.get("shard_recipe") == "device" else "rock"
-    keep = max(80, min(260, int(payload.get("candidate_limit", 180))))
+    keep = max(120, min(600, int(payload.get("candidate_limit", 320))))
     groups = [GroupSpec("trade", lmd_trade_count), GroupSpec("orundum", orundum_count),
               GroupSpec("gold", gold_count), GroupSpec("exp", exp_count), GroupSpec("shard", shard_count),
               GroupSpec("power", power_count)]
     groups = [g for g in groups if g.count]
     model_shift_hours = max(1.0, min(24.0, float(payload.get("model_shift_hours", payload.get("shift_hours", 8)))))
+    model_shift_hours_b = max(1.0, min(24.0, float(payload.get("_model_shift_hours_b", model_shift_hours))))
     base_context = BaseContext(
         shift_hours=model_shift_hours,
         collection_interval_hours=max(1.0, min(24.0, float(payload.get("collection_interval_hours", payload.get("shift_hours", 8))))),
@@ -513,13 +518,14 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
         "solver": solver,
         "search_audit": {
             "claim": "候选集内协调解，不是全组合全周期全局最优证明",
-            "candidate_operator_pool": "每类产出设施先按单人启发式保留最多 34 人（发电站 28 人，另含少量中性候选）",
+            "candidate_operator_pool": "每类产出设施保留最多 42 名相关干员（发电站 32 名），并为每名高价值干员保留代表组合与多条互斥候选链",
             "candidate_retain_target_per_room_type": keep,
             "candidate_counts": {key: len(value) for key, value in candidates.items()},
             "control_states_compared": len(control_options),
             "modeled_shift_hours": model_shift_hours,
+            "modeled_shift_hours_b": model_shift_hours_b,
             "duration_refinements": int(payload.get("_duration_refinement_count", 0)),
-            "rotation_strategy": "先求 A 队，再从剩余干员求 B 队；尚未联合求解两队与时间轴",
+            "rotation_strategy": "A/B 班组仍分两阶段生成；候选范围已扩大，随后在所有收取节点组合上优化两队工时占比",
         },
         "layout": {"name": layout_key, "trade": trade_count, "lmd_trade": lmd_trade_count,
                    "orundum_trade": orundum_count, "factory": factory_count, "gold": gold_count,
@@ -533,6 +539,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
         "catalog_mechanism_coverage": catalog_coverage,
         "warnings": _warnings(selected, metrics),
         "morale": analyze_morale(_room_rows(selected), roster, catalog, payload.get("shift_hours", 8)),
+        "dorm_helper": dorm_helper,
         "frontier": [],
     }
     if coverage["partial_count"]:
@@ -553,9 +560,15 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
             for room in [*result.get("support_rooms", []), *result.get("rooms", [])]
             for operator_id in room.get("operators", [])
         }
+        if dorm_helper:
+            assigned_a.add(dorm_helper["id"])
         remaining = [operator for operator in roster if operator.get("id") not in assigned_a]
         if len(remaining) >= 21:
-            second_payload = {**payload, "operators": remaining, "include_rotation": False, "_rotation_internal": True}
+            second_payload = {
+                **payload, "operators": remaining, "include_rotation": False,
+                "_rotation_internal": True, "lock_dorm_helper": False,
+                "model_shift_hours": model_shift_hours_b,
+            }
             team_b = optimize(second_payload, catalog, include_frontier=False)
             result["rotation"] = build_rotation(
                 result, team_b, float(payload.get("max_work_hours", payload.get("shift_hours", 8))),
@@ -563,18 +576,24 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 collection_interval_hours=base_context.collection_interval_hours,
                 morale_floor=float(payload.get("morale_floor", 1)),
                 max_work_hours=float(payload.get("max_work_hours", payload.get("shift_hours", 24))),
+                dorm_helper=dorm_helper,
             )
             # Time-dependent skills were ranked using a provisional duration.
             # Re-run the whole A/B construction at the duration produced by the
             # morale scheduler until it stabilizes (bounded to two refinements).
             durations = result["rotation"].get("team_work_hours") or {}
-            actual_model_hours = (float(durations.get("A", model_shift_hours)) +
-                                  float(durations.get("B", model_shift_hours))) / 2.0
+            actual_model_hours_a = float(durations.get("A", model_shift_hours))
+            actual_model_hours_b = float(durations.get("B", model_shift_hours_b))
             refinement_count = int(payload.get("_duration_refinement_count", 0))
-            if abs(actual_model_hours - model_shift_hours) > 1e-6 and refinement_count < 2:
+            durations_changed = (
+                abs(actual_model_hours_a - model_shift_hours) > 1e-6
+                or abs(actual_model_hours_b - model_shift_hours_b) > 1e-6
+            )
+            if durations_changed and refinement_count < 3:
                 refined_payload = {
                     **payload,
-                    "model_shift_hours": actual_model_hours,
+                    "model_shift_hours": actual_model_hours_a,
+                    "_model_shift_hours_b": actual_model_hours_b,
                     "_duration_refinement_count": refinement_count + 1,
                 }
                 return optimize(refined_payload, catalog, include_frontier=include_frontier)

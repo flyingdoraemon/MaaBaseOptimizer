@@ -197,6 +197,7 @@ $("optimizeButton").addEventListener("click", async () => {
     shard_recipe: $("shardRecipe").value,
     drone_target: $("droneTarget").value,
     schedule_mode: $("scheduleMode").value,
+    lock_dorm_helper: $("lockDormHelper").checked,
     shift_hours: +$("shiftHours").value,
     max_work_hours: +$("shiftHours").value,
     morale_floor: 1,
@@ -205,7 +206,7 @@ $("optimizeButton").addEventListener("click", async () => {
     gold_inventory: +$("goldInventory").value || 0,
     shard_inventory: +$("shardInventory").value || 0,
     include_rotation: true,
-    candidate_limit: 180,
+    candidate_limit: 320,
   };
   try {
     const data = await request("/api/optimize", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
@@ -231,12 +232,14 @@ function renderResults(data) {
   renderCrossRoomFlows(data.cross_room_flows || []);
   renderBars(m);
   renderRotation(data.rotation);
+  renderYieldCurve(data.rotation?.production_curve);
   const audit=data.search_audit;
-  const searchWarning=audit ? `求解范围：${audit.claim}。${audit.candidate_operator_pool}；每类房间目标保留 ${audit.candidate_retain_target_per_room_type} 个组合；阶段技能按最终 ${audit.modeled_shift_hours} 小时班长积分${audit.duration_refinements?`（经 ${audit.duration_refinements} 次时长回代）`:""}；${audit.rotation_strategy}。` : "";
+  const searchWarning=audit ? `求解范围：${audit.claim}。${audit.candidate_operator_pool}；每类房间目标保留 ${audit.candidate_retain_target_per_room_type} 个组合；阶段技能分别按 A ${audit.modeled_shift_hours}h / B ${audit.modeled_shift_hours_b || audit.modeled_shift_hours}h 积分${audit.duration_refinements?`（经 ${audit.duration_refinements} 次时长回代）`:""}；${audit.rotation_strategy}。` : "";
   $("warnings").innerHTML = [searchWarning,...data.warnings].filter(Boolean).map(x => `<div class="warning">${escapeHtml(x)}</div>`).join("");
-  renderMorale(data.morale);
+  renderMorale(data.morale, data.rotation);
   const teams = data.rotation?.teams || {A:{support_rooms:data.support_rooms||[],rooms:data.rooms}};
-  $("rooms").innerHTML = Object.entries(teams).map(([team,plan])=>`<section class="team-room-group"><div class="team-room-title"><strong>${team} 队</strong><span>${team === "A" ? "第 1 / 3 / 5 班" : "第 2 / 4 / 6 班"}</span></div><div class="rooms">${[...(plan.support_rooms||[]),...(plan.rooms||[])].map(room => `
+  const workHours=data.rotation?.team_work_hours||{};
+  $("rooms").innerHTML = Object.entries(teams).map(([team,plan])=>`<section class="team-room-group"><div class="team-room-title"><strong>${team} 队</strong><span>${workHours[team] ? `每循环工作 ${workHours[team]} 小时` : "单班方案"}</span></div><div class="rooms">${[...(plan.support_rooms||[]),...(plan.rooms||[])].map(room => `
     <article class="room">
       <div class="room-head"><h3>${escapeHtml(room.room)}</h3><span class="eff">+${room.efficiency}%</span></div>
       <div class="names">${room.names.map(escapeHtml).join(" · ")}</div>
@@ -311,7 +314,7 @@ function renderRotation(rotation) {
     return;
   }
   const durationText=Object.entries(rotation.team_work_hours||{}).map(([team,h])=>`${team} ${h}h`).join(" / ");
-  $("rotationPattern").textContent=`${durationText || rotation.pattern.join(" → ")} · 收取 ${rotation.collection_interval_hours || rotation.shift_hours}h`;
+  $("rotationPattern").textContent=`${durationText || rotation.pattern.join(" → ")} · 循环 ${rotation.natural_cycle_hours || rotation.cycle_hours}h · 收取 ${rotation.collection_interval_hours || rotation.shift_hours}h`;
   $("shiftStrip").innerHTML=rotation.shifts.map(shift=>`<details class="shift-chip team-${shift.team.toLowerCase()}">
     <summary><strong>第 ${shift.index} 班 · ${shift.team} 队</strong><span>${hourLabel(shift.start)}–${hourLabel(shift.end)}</span></summary>
     <div>${shift.rooms.map(room=>`<p><b>${escapeHtml(room.room)}</b><span>${room.names.map(escapeHtml).join(" / ")}</span>${room.time_profiles.map(profile=>`<em>${escapeHtml(profile.operator)} ${escapeHtml(profile.label)}：班均 +${profile.average_percent}%</em>`).join("")}</p>`).join("")}</div>
@@ -331,8 +334,48 @@ function renderRotation(rotation) {
     }).join("")}</div>
   </div>`).join("");
   const inventoryNote=rotation.inventory_policy?.note || "";
-  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>房间</strong><div>${ticks}</div></div>${rows}<p class="timeline-note">${escapeHtml(rotation.morale.note)} 排程校验：${rotation.morale.feasible ? "两队均可在下次上班前恢复" : "存在恢复时间或床位小时不足"}。${escapeHtml(inventoryNote)} 悬停班次查看干员、技能、效率与结束心情。</p>`;
+  const dormNote=rotation.dormitory?.note || "";
+  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>房间</strong><div>${ticks}</div></div>${rows}<p class="timeline-note">${escapeHtml(rotation.morale.note)} 排程校验：${rotation.morale.feasible ? "两队均可在下次上班前恢复" : "存在恢复时间或床位小时不足"}。${escapeHtml(dormNote)} ${escapeHtml(inventoryNote)} 悬停班次查看干员、技能、效率与结束心情。</p>`;
 }
+
+const curveLabels={lmd_per_day:"龙门币",exp_per_day:"作战经验",gold_net_per_day:"赤金净流量",gold_made_per_day:"赤金制造",gold_used_per_day:"赤金消耗",orundum_per_day:"合成玉",drones_per_day:"无人机"};
+
+function curveSvg(points, key, field, title, color) {
+  const width=760,height=190,pad={l:64,r:20,t:24,b:32};
+  const values=points.map(point=>+point[field][key]||0);
+  let min=Math.min(0,...values), max=Math.max(0,...values);
+  if (Math.abs(max-min)<1e-9) max=min+1;
+  const x=minute=>pad.l+minute/1440*(width-pad.l-pad.r);
+  const y=value=>height-pad.b-(value-min)/(max-min)*(height-pad.t-pad.b);
+  const polyline=points.map(point=>`${x(point.minute).toFixed(2)},${y(+point[field][key]||0).toFixed(2)}`).join(" ");
+  const zero=y(0);
+  const ticks=[0,6,12,18,24].map(hour=>`<text x="${x(hour*60)}" y="180" text-anchor="middle">${hour}h</text>`).join("");
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(title)}">
+    <text x="12" y="16" class="curve-title">${escapeHtml(title)}</text>
+    <line x1="${pad.l}" y1="${zero}" x2="${width-pad.r}" y2="${zero}" class="curve-zero"/>
+    <text x="${pad.l-8}" y="${pad.t+4}" text-anchor="end">${number(Math.round(max))}</text>
+    <text x="${pad.l-8}" y="${height-pad.b}" text-anchor="end">${number(Math.round(min))}</text>
+    ${ticks}<polyline points="${polyline}" fill="none" stroke="${color}" stroke-width="3" vector-effect="non-scaling-stroke"/>
+  </svg>`;
+}
+
+function renderYieldCurve(curve) {
+  if (!curve?.points?.length) {
+    $("yieldCurve").innerHTML='<p class="side-note">生成轮班后显示 24 小时收益曲线。</p>';
+    return;
+  }
+  const key=$("curveMetric").value;
+  const label=curveLabels[key]||key;
+  const points=curve.points;
+  const final=+points.at(-1).cumulative[key]||0;
+  const rates=points.map(point=>+point.rates_per_hour[key]||0);
+  const transitions=points.filter((point,index)=>index===0||point.team!==points[index-1].team)
+    .map(point=>`${Math.floor(point.minute/60)}:${String(point.minute%60).padStart(2,"0")} ${point.team}班`).join(" → ");
+  $("yieldCurve").innerHTML=`<div class="curve-summary"><div><span>24h 累计</span><strong>${signed(final)} ${escapeHtml(label)}</strong></div><div><span>小时速率范围</span><strong>${signed(Math.min(...rates))} ～ ${signed(Math.max(...rates))}</strong><small>每分钟 ${signed(Math.min(...rates)/60,3)} ～ ${signed(Math.max(...rates)/60,3)}</small></div><div><span>班次切换</span><strong>${escapeHtml(transitions)}</strong></div></div>
+    <div class="curve-grid">${curveSvg(points,key,"cumulative",`${label} · 累计收益`,"#53d3c8")}${curveSvg(points,key,"rates_per_hour",`${label} · 当前每小时速率`,"#78a9ff")}</div><p class="side-note">${escapeHtml(curve.note)}</p>`;
+}
+
+$("curveMetric").addEventListener("change",()=>renderYieldCurve(state.lastResult?.rotation?.production_curve));
 
 async function simulateSchedule(result, days, trials) {
   const plans=result.rotation ? Object.values(result.rotation.teams) : [{rooms:result.rooms,metrics:result.metrics}];
@@ -363,14 +406,19 @@ async function runQuickSimulation(result) {
   }
 }
 
-function renderMorale(m) {
+function renderMorale(m, rotation) {
   const helpers = (m.dorm_helpers || []).slice(0,4).map(x=>`${escapeHtml(x.operator)}（全体 +${x.all} / 单体 +${x.single}）`).join("、") || "当前 Box 无需专门配置";
+  const locked=rotation?.dormitory?.locked_helper;
+  const rotationAudits=Object.entries(rotation?.morale?.teams||{});
+  const slowest=rotationAudits.length ? Math.max(...rotationAudits.map(([,audit])=>+audit.slowest_recovery_hours||0)) : m.max_recovery_hours;
+  const bedLedger=rotationAudits.length ? rotationAudits.map(([team,audit])=>`${team} ${audit.bed_hours_required}/${audit.bed_hours_available}`).join(" · ") : `${m.bed_hours_required} / ${m.bed_hours_available}`;
+  const sustainable=rotation?.morale?.feasible ?? m.two_team_feasible;
   $("moraleAudit").innerHTML = `<h3>轮班与宿舍可持续性</h3><div class="morale-grid">
-    <div><span>满级宿舍基础恢复</span><strong>${m.base_recovery_per_hour} / 小时</strong></div>
-    <div><span>本班最慢回满</span><strong>${m.max_recovery_hours} 小时</strong></div>
-    <div><span>所需 / 可用床位小时</span><strong>${m.bed_hours_required} / ${m.bed_hours_available}</strong></div>
-    <div><span>建议轮班队伍</span><strong>${m.recommended_rotation_teams} 队</strong></div>
-  </div><p>${escapeHtml(m.note)} 当前按 ${m.shift_hours} 小时一班审计，含 ${m.production_slots} 个产出岗位与 ${m.support_slots} 个辅助岗位；${m.owned_operators} 名干员相对最低 ${m.minimum_distinct_operators} 名的容量判断：${m.roster_capacity_ok ? "通过" : "不足"}。菲亚梅塔：${m.fiammetta_owned ? "已拥有" : "未拥有"}。</p><p>可用宿舍辅助前列：${helpers}</p>`;
+    <div><span>满级宿舍基础恢复</span><strong>${rotation?.morale?.base_recovery_per_hour || m.base_recovery_per_hour} / 小时</strong></div>
+    <div><span>两班最慢回满</span><strong>${slowest} 小时</strong></div>
+    <div><span>A/B 所需 / 可用床位小时</span><strong>${bedLedger}</strong></div>
+    <div><span>当前循环</span><strong>${sustainable ? "两队可持续" : "恢复不足"}</strong></div>
+  </div><p>${escapeHtml(rotation?.morale?.note || m.note)} 含 ${m.production_slots} 个产出岗位与 ${m.support_slots} 个辅助岗位；${m.owned_operators} 名干员相对最低 ${m.minimum_distinct_operators} 名的容量判断：${m.roster_capacity_ok ? "通过" : "不足"}。菲亚梅塔：${m.fiammetta_owned ? "已拥有" : "未拥有"}。</p><p>固定宿舍位：${locked ? `${escapeHtml(locked.name)}（群体 +${locked.all}/小时）` : "未启用"}。可用宿舍辅助前列：${helpers}</p>`;
 }
 
 $("simulateButton").addEventListener("click", async () => {
