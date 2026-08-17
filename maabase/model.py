@@ -223,7 +223,12 @@ def evaluate_team(team: Iterable[dict], product: str, catalog: dict, context: Ba
                 amount = 0.0
             value += amount
             speed_value += speed_amount
-            op_details.append({"name": skill["name"], "description": skill["description"], "value": amount})
+            op_details.append({
+                "name": skill["name"],
+                "description": skill["description"],
+                "value": amount,
+                "icon": icon,
+            })
             description = skill.get("description", "")
             affects_output = any(word in description for word in ("生产力", "订单获取效率", "充能速度"))
             if mechanic_is_partial(skill) and icon not in CONTEXT_MODELED_ICONS:

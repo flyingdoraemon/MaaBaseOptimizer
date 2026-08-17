@@ -9,7 +9,7 @@ from maabase.mechanics import mechanic_is_partial, resolve_trade_mechanics, warm
 from maabase.model import _orundum_economics, _trade_economics, active_skills, evaluate_team, prepare_operators
 from maabase.morale import analyze_morale
 from maabase.state_model import BaseContext, _average_empty_order_slots, _control_effect
-from maabase.optimizer import GroupSpec, _metrics, _solve, optimize
+from maabase.optimizer import GroupSpec, _metrics, _production_allocation_audit, _solve, optimize
 from maabase.scheduler import _morale_rates, _team_duration, build_rotation
 from maabase.simulator import simulate
 from maabase.valuation import EXP_VALUE, GOLD_VALUE, LMD_VALUE
@@ -298,6 +298,40 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(rotation["pattern"], ["A", "B"])
         self.assertEqual(rotation["production_curve"]["points"][-1]["cumulative"]["lmd_per_day"], 20000)
 
+    def test_staggered_schedule_uses_independent_daily_room_splits(self):
+        def room(key, room_name, operator, multiplier, lmd=0):
+            return {"key": key, "room": room_name, "operators": [operator], "names": [operator],
+                    "details": [{"operator": operator, "skills": []}], "efficiency": (multiplier - 1) * 100,
+                    "multiplier": multiplier, "trade": {"lmd_per_day": lmd, "gold_per_day": 20} if lmd else None,
+                    "time_profiles": []}
+        metrics = {"lmd_per_day": 0, "exp_per_day": 0, "gold_made_per_day": 0,
+                   "gold_used_per_day": 0, "gold_net_per_day": 0, "gold_inventory": 0}
+        team_a = {"rooms": [room("trade", "龙门贸易站 1", "a-trade", 1.8, 22000),
+                            room("gold", "赤金制造站 1", "a-gold", 1.2)], "support_rooms": [], "metrics": metrics}
+        team_b = {"rooms": [room("trade", "龙门贸易站 1", "b-trade", 1.2, 12000),
+                            room("gold", "赤金制造站 1", "b-gold", 1.2)], "support_rooms": [], "metrics": metrics}
+        rotation = build_rotation(team_a, team_b, 36, schedule_mode="staggered",
+                                  collection_interval_hours=2, max_work_hours=36)
+        trade = rotation["room_work_hours"]["龙门贸易站 1"]
+        gold = rotation["room_work_hours"]["赤金制造站 1"]
+        self.assertEqual(sum(trade.values()), 24)
+        self.assertEqual(sum(gold.values()), 24)
+        self.assertGreater(trade["A"], trade["B"])
+        self.assertEqual(gold, {"A": 12, "B": 12})
+        self.assertNotEqual(trade, gold)
+        self.assertEqual(sorted(event["time"] for event in rotation["handover_events"]), [12, 18])
+
+    def test_multi_facility_operator_audit_reports_single_assignment(self):
+        roster = [{"id": "char_502_nblade", "elite": 0, "level": 30}]
+        result = {"rooms": [{"room": "龙门贸易站 1", "key": "trade",
+                              "operators": ["char_502_nblade"]}], "support_rooms": []}
+        audit = _production_allocation_audit(result, roster, self.catalog)
+        self.assertEqual(audit["simultaneous_duplicates"], [])
+        row = audit["multi_facility_operators"][0]
+        self.assertEqual(row["operator"], "夜刀")
+        self.assertEqual(set(row["eligible_facilities"]), {"贸易站", "制造站"})
+        self.assertEqual(row["assignments"], {"A": ["龙门贸易站 1"]})
+
     def test_fiammetta_recovery_is_a_time_state_not_a_roster_exception(self):
         def team(label):
             room = {"key": "gold", "room": "赤金制造站 1", "operators": ["target"], "names": ["高效目标"],
@@ -433,6 +467,14 @@ class CoreTests(unittest.TestCase):
         first = simulate(payload)
         second = simulate(payload)
         self.assertNotEqual(first["seed"], second["seed"])
+
+    def test_simulator_respects_staggered_room_work_fraction(self):
+        room = {"key": "gold", "room": "赤金制造站 1", "operators": ["gold"],
+                "names": ["测试"], "multiplier": 1.0, "work_fraction": 0.5}
+        result = simulate({"rooms": [room], "metrics": {"gold_made_per_day": 10},
+                           "days": 10, "trials": 100, "seed": 1})
+        self.assertEqual(result["simulated"]["gold_made_per_day"], 10)
+        self.assertTrue(any("实际在岗比例" in note for note in result["assumptions"]))
 
     def test_power_station_speed_changes_drone_multiplier(self):
         team = prepare_operators(

@@ -31,6 +31,7 @@
         <div class="rail-heading"><div><span class="section-index">02</span><h2>生产方案</h2></div></div>
         <div class="control-stack primary-controls">
           <label><span>基建布局</span><select id="baseLayout"><option value="243">2-4-3</option><option value="153">1-5-3</option><option value="333">3-3-3</option></select></label>
+          <div id="baseLayoutPreview" class="base-layout-preview" aria-label="基建设施布局预览"></div>
           <div class="split-control"><label><span>作战记录</span><select id="expFactories"></select></label><label><span>源石碎片</span><select id="shardFactories"></select></label></div>
           <p class="inline-hint" id="goldFactoryHint"></p>
           <label><span>源石订单</span><select id="orundumTrades"></select></label>
@@ -51,8 +52,8 @@
         <details class="compact-disclosure settings-disclosure">
           <summary><span>轮班与宿舍</span><b>⌄</b></summary>
           <div class="control-stack">
-            <label><span>轮班策略</span><select id="scheduleMode"><option value="morale_aware">心情阈值 + 收取节点</option><option value="fixed">固定时长（对照）</option></select></label>
-            <div class="split-control"><label><span>最长工作</span><select id="shiftHours"><option value="24">24 小时</option><option value="16">16 小时</option><option value="12">12 小时</option><option value="8">8 小时</option></select></label><label><span>统一收取</span><select id="collectionInterval"><option value="8">每 8 小时</option><option value="4">每 4 小时</option><option value="12">每 12 小时</option></select></label></div>
+            <label><span>轮班策略</span><select id="scheduleMode"><option value="staggered">各房间独立换班</option><option value="morale_aware">整套班组换班（对照）</option><option value="fixed">固定等长（对照）</option></select></label>
+            <div class="split-control"><label><span>连续工作上限</span><select id="shiftHours"><option value="36">自动按心情（≤36h）</option><option value="24">24 小时</option><option value="16">16 小时</option><option value="12">12 小时</option><option value="8">8 小时</option></select></label><label><span>可上线间隔</span><select id="collectionInterval"><option value="2">每 2 小时</option><option value="4">每 4 小时</option><option value="6">每 6 小时</option><option value="8">每 8 小时</option><option value="12">每 12 小时</option></select></label></div>
             <label class="switch-control"><input id="lockDormHelper" type="checkbox" checked><span><b>锁定宿舍恢复位</b><small>占用一张床并增强其余床位</small></span></label>
             <label class="switch-control"><input id="enableFiammetta" type="checkbox" checked><span><b>启用菲亚梅塔</b><small>拥有时纳入换班搜索</small></span></label>
           </div>
@@ -87,7 +88,7 @@
 
         <div class="tab-panel" data-tab-panel="mechanics">
           <div class="mechanics-grid"><article class="panel side-card"><div class="side-title"><span class="side-icon gold-icon">Au</span><div><small>INVENTORY</small><h3>赤金流量</h3></div></div><div id="goldMonitor"></div></article><article class="panel side-card"><div class="side-title"><span class="side-icon drone-icon">⚡</span><div><small>DRONE</small><h3>无人机分流</h3></div></div><div id="droneMonitor"></div></article><article class="panel side-card wide"><div class="side-title"><span class="side-icon state-icon">⇄</span><div><small>CROSS ROOM</small><h3>跨房间状态</h3></div></div><div id="crossRoomPanel" class="state-flows"></div></article></div>
-          <article id="moraleAudit" class="panel morale-audit"></article><article id="objectiveComparison" class="panel objective-comparison"></article><details class="panel audit-disclosure"><summary><span>求解范围与注意事项</span><b>⌄</b></summary><div id="warnings" class="warnings"></div></details>
+          <article id="moraleAudit" class="panel morale-audit"></article><article id="objectiveComparison" class="panel objective-comparison"></article><details class="panel audit-disclosure"><summary><span>多设施干员分配</span><b>⌄</b></summary><div id="allocationAudit" class="allocation-audit"></div></details><details class="panel audit-disclosure"><summary><span>求解范围与注意事项</span><b>⌄</b></summary><div id="warnings" class="warnings"></div></details>
         </div>
 
         <div class="tab-panel" data-tab-panel="simulation">
@@ -101,6 +102,7 @@
   <dialog id="sklandDialog" class="skland-dialog">
     <div class="dialog-head"><div><span class="card-kicker">SKLAND</span><h2>同步干员 Box</h2></div><button class="quiet" id="closeSklandButton" aria-label="关闭">关闭</button></div><p class="dialog-copy">使用森空岛 App 扫码授权。凭据仅保留在本次进程中。</p><div class="qr-wrap"><img id="sklandQr" alt="鹰角扫码登录二维码"><div id="qrPlaceholder">正在生成二维码…</div></div><div id="sklandMessage" class="message">正在连接…</div><label id="accountPicker" class="account-picker hidden"><span>游戏角色</span><select id="sklandAccount"></select></label><button id="confirmSklandButton" class="optimize hidden">导入此角色</button><button id="retrySklandButton" class="quiet hidden">重新生成二维码</button>
   </dialog>
+  <script src="/vendor/echarts.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

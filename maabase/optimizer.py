@@ -8,9 +8,9 @@ import heapq
 import itertools
 from typing import Any
 
-from .model import generate_candidates, prepare_operators
+from .model import active_skills, generate_candidates, prepare_operators
 from .morale import analyze_morale, choose_dorm_helper
-from .scheduler import DRONE_CAPACITY, build_rotation
+from .scheduler import DRONE_CAPACITY, build_rotation, build_staggered_production_curve
 from .valuation import candidate_daily_value, metrics_daily_value, metrics_layout_score, public_valuation
 from .state_model import (
     ABYSSAL_HUNTER_IDS,
@@ -397,6 +397,49 @@ def _room_rows(selected: dict[str, list[dict]]) -> list[dict]:
     return rows
 
 
+def _room_weighted_selection(rotation: dict) -> dict[str, list[dict]]:
+    """Blend A/B room outputs by each physical room's independent duty ratio."""
+    teams = rotation.get("teams") or {}
+    durations = rotation.get("room_work_hours") or {}
+    buckets: dict[str, dict[str, list[dict]]] = {"A": {}, "B": {}}
+    for label in ("A", "B"):
+        for room in (teams.get(label) or {}).get("rooms", []):
+            buckets[label].setdefault(str(room.get("key") or ""), []).append(room)
+    selected: dict[str, list[dict]] = {}
+    for key, rooms_a in buckets["A"].items():
+        rooms_b = buckets["B"].get(key, [])
+        for index, room_a in enumerate(rooms_a):
+            if index >= len(rooms_b):
+                continue
+            room_b = rooms_b[index]
+            room_name = str(room_a.get("room") or "")
+            pair_hours = durations.get(room_name) or {"A": 1.0, "B": 1.0}
+            total = max(1e-9, float(pair_hours["A"]) + float(pair_hours["B"]))
+            wa, wb = float(pair_hours["A"]) / total, float(pair_hours["B"]) / total
+            blended = {
+                **room_a,
+                "operators": [*room_a.get("operators", []), *room_b.get("operators", [])],
+                "names": [f"A：{' / '.join(room_a.get('names', []))}", f"B：{' / '.join(room_b.get('names', []))}"],
+                "efficiency": float(room_a.get("efficiency", 0) or 0) * wa + float(room_b.get("efficiency", 0) or 0) * wb,
+                "multiplier": float(room_a.get("multiplier", 1) or 1) * wa + float(room_b.get("multiplier", 1) or 1) * wb,
+                "time_profiles": [],
+            }
+            if key == "trade":
+                trade_a, trade_b = room_a.get("trade") or {}, room_b.get("trade") or {}
+                blended["trade"] = {
+                    "lmd_per_day": float(trade_a.get("lmd_per_day", 0) or 0) * wa + float(trade_b.get("lmd_per_day", 0) or 0) * wb,
+                    "gold_per_day": float(trade_a.get("gold_per_day", 0) or 0) * wa + float(trade_b.get("gold_per_day", 0) or 0) * wb,
+                }
+            elif key == "orundum":
+                order_a, order_b = room_a.get("orundum") or {}, room_b.get("orundum") or {}
+                blended["orundum"] = {
+                    "orundum_per_day": float(order_a.get("orundum_per_day", 0) or 0) * wa + float(order_b.get("orundum_per_day", 0) or 0) * wb,
+                    "shards_per_day": float(order_a.get("shards_per_day", 0) or 0) * wa + float(order_b.get("shards_per_day", 0) or 0) * wb,
+                }
+            selected.setdefault(key, []).append(blended)
+    return selected
+
+
 def _assignment_signature(selected: dict[str, list[dict]]) -> tuple:
     """Compare real room teams while ignoring interchangeable room numbers."""
     return tuple(
@@ -414,6 +457,48 @@ def _result_assignment_signature(result: dict) -> tuple:
         }))
         for team, plan in sorted(teams.items())
     )
+
+
+def _production_allocation_audit(result: dict, roster: list[dict], catalog: dict) -> dict:
+    """Expose how operators eligible for several production facilities were resolved."""
+    facility_names = {"TRADING": "贸易站", "MANUFACTURE": "制造站", "POWER": "发电站"}
+    teams = (result.get("rotation") or {}).get("teams") or {
+        "A": {"rooms": result.get("rooms", []), "support_rooms": result.get("support_rooms", [])}
+    }
+    assigned: dict[str, dict[str, list[str]]] = {}
+    duplicates = []
+    for label, plan in teams.items():
+        counts: dict[str, list[str]] = {}
+        for room in [*(plan.get("support_rooms") or []), *(plan.get("rooms") or [])]:
+            for operator_id in room.get("operators", []):
+                counts.setdefault(operator_id, []).append(room.get("room", "未知设施"))
+        for operator_id, rooms in counts.items():
+            assigned.setdefault(operator_id, {})[label] = rooms
+            if len(rooms) > 1:
+                duplicates.append({"team": label, "operator_id": operator_id, "rooms": rooms})
+    rows = []
+    for operator in roster:
+        skills = active_skills(operator, catalog)
+        facilities = sorted({skill.get("room") for skill in skills if skill.get("room") in facility_names})
+        if len(facilities) < 2:
+            continue
+        definition = catalog["operators"].get(operator.get("id"), {})
+        rows.append({
+            "operator_id": operator.get("id"),
+            "operator": definition.get("name", operator.get("name", operator.get("id"))),
+            "eligible_facilities": [facility_names[item] for item in facilities],
+            "assignments": assigned.get(operator.get("id"), {}),
+            "skills": [
+                {"name": skill.get("name"), "facility": facility_names.get(skill.get("room")), "icon": skill.get("icon")}
+                for skill in skills if skill.get("room") in facility_names
+            ],
+        })
+    return {
+        "multi_facility_operators": rows,
+        "simultaneous_duplicates": duplicates,
+        "constraint": "同一班次内每名干员至多进入一个设施；贸易、制造和发电候选在同一个集合打包问题中竞争。",
+        "rotation_scope": "A/B 两班目前顺序生成，跨班不是联合全局最优证明；两班时段不重叠，未启用菲亚梅塔时干员也不会跨班复用。",
+    }
 
 
 def _result_room_differences(current: dict, alternate: dict) -> list[dict]:
@@ -455,7 +540,8 @@ def _control_row(team: list[dict], context: BaseContext) -> dict | None:
             {
                 "operator": operator["name"],
                 "skills": [
-                    {"name": skill["name"], "description": skill["description"], "value": 0}
+                    {"name": skill["name"], "description": skill["description"], "value": 0,
+                     "icon": skill.get("icon", "")}
                     for skill in operator["skills"] if skill.get("room") == "CONTROL"
                 ],
                 "value": 0,
@@ -501,7 +587,7 @@ def _support_rows(
             "details": [{
                 "operator": operator["name"],
                 "skills": [{"name": skill["name"], "description": skill["description"],
-                            "value": skill.get("efficiency", 0)}
+                            "value": skill.get("efficiency", 0), "icon": skill.get("icon", "")}
                            for skill in operator["skills"] if skill.get("room") == skill_room],
                 "value": max(0.0, skill_score(operator, skill_room)),
             } for operator in team],
@@ -934,6 +1020,85 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 fiammetta=result["fiammetta"],
                 objective_mode=objective_mode,
             )
+            if result["rotation"].get("schedule_mode") == "staggered":
+                weighted_selected = _room_weighted_selection(result["rotation"])
+                weighted_metrics = _metrics(
+                    weighted_selected, catalog, drone_target, external_gold_per_day,
+                    gold_inventory, shard_recipe, shard_inventory,
+                    base_context.collection_interval_hours, gold_net_target_per_day,
+                )
+                curve = build_staggered_production_curve(
+                    result["rotation"], catalog["constants"], drone_target=drone_target,
+                    external_gold_per_day=external_gold_per_day,
+                    gold_net_target_per_day=gold_net_target_per_day,
+                )
+                final_curve = (curve.get("points") or [{}])[-1].get("cumulative") or {}
+                for key in (
+                    "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
+                    "gold_net_per_day", "orundum_per_day", "shards_net_per_day",
+                ):
+                    if key in final_curve:
+                        weighted_metrics[key] = round(float(final_curve[key]), 2)
+                weighted_metrics["gold_production_net_per_day"] = round(
+                    float(weighted_metrics.get("gold_made_per_day", 0))
+                    - float(weighted_metrics.get("gold_used_per_day", 0)), 2,
+                )
+                weighted_metrics["gold_inventory_days"] = (
+                    None if float(weighted_metrics.get("gold_net_per_day", 0)) >= 0 else
+                    round(gold_inventory / -float(weighted_metrics["gold_net_per_day"]), 1)
+                )
+                weighted_metrics["lmd_net_after_shards_per_day"] = round(
+                    float(weighted_metrics.get("lmd_per_day", 0))
+                    - float(weighted_metrics.get("lmd_shard_cost_per_day", 0)), 2,
+                )
+                drone_summary = curve.get("drone_summary") or {}
+                dynamic_allocations = drone_summary.get("allocations") or []
+                dynamic_deltas = drone_summary.get("deltas") or {}
+                allocation_kinds: dict[str, dict] = {}
+                for item in dynamic_allocations:
+                    kind = str(item.get("kind") or "unknown")
+                    bucket = allocation_kinds.setdefault(kind, {"label": item.get("label") or kind, "fraction": 0.0})
+                    bucket["fraction"] += float(item.get("fraction", 0) or 0)
+                target_label = " + ".join(
+                    f"{item['label']} {item['fraction'] * 100:.1f}%"
+                    for item in allocation_kinds.values()
+                ) or "未投入"
+                weighted_metrics["drone_hours_per_day"] = float(drone_summary.get("equivalent_hours", 0) or 0)
+                weighted_metrics["drone_target"] = target_label
+                weighted_metrics["drone_effect"] = {
+                    **(weighted_metrics.get("drone_effect") or {}),
+                    "target_kind": drone_target, "target": target_label,
+                    "equivalent_hours": weighted_metrics["drone_hours_per_day"],
+                    "allocations": dynamic_allocations,
+                    "lmd_per_day": round(float(dynamic_deltas.get("lmd_per_day", 0)), 3),
+                    "exp_per_day": round(float(dynamic_deltas.get("exp_per_day", 0)), 3),
+                    "gold_made_per_day": round(float(dynamic_deltas.get("gold_made_per_day", 0)), 3),
+                    "gold_used_per_day": round(float(dynamic_deltas.get("gold_used_per_day", 0)), 3),
+                    "orundum_per_day": round(float(dynamic_deltas.get("orundum_per_day", 0)), 3),
+                    "gold_net_per_day": round(
+                        float(dynamic_deltas.get("gold_made_per_day", 0))
+                        - float(dynamic_deltas.get("gold_used_per_day", 0)), 3,
+                    ),
+                }
+                balance = weighted_metrics["drone_effect"].get("balance") or {}
+                if balance:
+                    projected = float(weighted_metrics.get("gold_net_per_day", 0) or 0)
+                    target = float(gold_net_target_per_day)
+                    only_trade = bool(dynamic_allocations) and all(item.get("kind") == "trade" for item in dynamic_allocations)
+                    weighted_metrics["drone_effect"]["balance"] = {
+                        **balance,
+                        "base_gold_net_per_day": round(
+                            projected - float(weighted_metrics["drone_effect"]["gold_net_per_day"]), 3
+                        ),
+                        "target_gold_net_per_day": target,
+                        "projected_gold_net_per_day": round(projected, 3),
+                        "all_trade_gold_net_per_day": round(projected, 3) if only_trade else balance.get("all_trade_gold_net_per_day"),
+                        "binding": abs(projected - target) <= 0.05,
+                        "balanced": abs(projected - target) <= 0.05,
+                        "regime": "trade_saturated" if only_trade else ("balanced" if abs(projected - target) <= 0.05 else "mixed"),
+                    }
+                result["rotation"]["average_metrics"] = weighted_metrics
+                result["rotation"]["production_curve"] = curve
             # Time-dependent skills were ranked using a provisional duration.
             # Re-run the whole A/B construction at the duration produced by the
             # morale scheduler until it stabilizes (bounded to two refinements).
@@ -1031,4 +1196,5 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
             },
         }
         result["objective"]["comparison"] = comparison
+    result["allocation_audit"] = _production_allocation_audit(result, roster, catalog)
     return result

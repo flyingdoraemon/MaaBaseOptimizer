@@ -66,7 +66,8 @@ def simulate(payload: dict) -> dict:
             names = " / ".join(room.get("names") or [])
             signature = tuple(sorted(str(operator) for operator in room.get("operators") or []))
             extra = drone_minutes_by_operators.get(signature, drone_hours * 60.0 if names and names in drone_note else 0.0)
-            horizon = days * (1440.0 + extra)
+            work_fraction = max(0.0, min(1.0, float(room.get("work_fraction", 1.0) or 0.0)))
+            horizon = days * (1440.0 * work_fraction + extra)
             elapsed = 0.0
             multiplier = float(room.get("multiplier", 1.0))
             distribution = room["trade"]["distribution"]
@@ -97,7 +98,8 @@ def simulate(payload: dict) -> dict:
         names = " / ".join(room.get("names") or [])
         signature = tuple(sorted(str(operator) for operator in room.get("operators") or []))
         extra = drone_minutes_by_operators.get(signature, drone_hours * 60.0 if names and names in drone_note else 0.0)
-        horizon = days * (1440.0 + extra)
+        work_fraction = max(0.0, min(1.0, float(room.get("work_fraction", 1.0) or 0.0)))
+        horizon = days * (1440.0 * work_fraction + extra)
         multiplier = float(room.get("multiplier", 1.0))
         if key == "gold":
             gold_made += int(horizon * multiplier / 72.0) / days
@@ -160,6 +162,8 @@ def simulate(payload: dict) -> dict:
         "订单品质先按班内线性暖机曲线积分成班均分布；快进与解析层重放同一分布，换班时重新开始暖机。",
         "无人机按收取节点分配给贸易站与制造站；随机层把各节点投入折算为对应房间的额外倒计时时间。",
     ]
+    if any(float(room.get("work_fraction", 1.0) or 0.0) < 1.0 for room in rooms):
+        assumptions.append("错峰排班按每个房间 A/B 班在 24 小时周期内的实际在岗比例分别重放，不使用整队平均工时。")
     if any("平均空位" in note for room in rooms for note in room.get("mechanic_notes", [])):
         assumptions.append("孑的订单空位加成先由收单周期稳态队列折算为班均速度；随机层尚未逐格重放订单仓库。")
     return {
