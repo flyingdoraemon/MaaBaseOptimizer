@@ -95,8 +95,8 @@
         </label>
         <label><span>候选组合目标</span>
           <select id="objectiveMode">
-            <option value="layout_output">按选定房间布局分别最大化</option>
-            <option value="sanity_value">一图流等效理智价值</option>
+            <option value="layout_output">固定产品布局：总产能等权最大化</option>
+            <option value="sanity_value">固定产品布局：一图流等效理智最大化</option>
           </select>
           <small>房间数量与产品始终是硬约束；等效价值只改变干员竞争时的取舍</small>
         </label>
@@ -152,6 +152,7 @@
             <article><span>赤金总净流量 / 日</span><strong id="goldKpi">—</strong><small id="goldKpiNote">含外部来源</small></article>
             <article><span>无人机 / 日</span><strong id="droneKpi">—</strong><small id="droneKpiNote">发电站合计</small></article>
           </div>
+          <article id="objectiveComparison" class="panel objective-comparison"></article>
           <article class="panel production-console">
             <div class="console-head"><div><p class="eyebrow">LIVE PRODUCTION</p><h3>每日生产监控</h3></div><span class="live-pill"><i></i>解析期望</span></div>
             <div id="productionMonitor" class="production-monitor"></div>

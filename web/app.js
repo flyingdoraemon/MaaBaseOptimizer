@@ -238,6 +238,7 @@ function renderResults(data) {
   $("goldKpiNote").textContent = `站内 ${signed(m.gold_production_net_per_day)} · 外部 +${m.gold_external_per_day}`;
   $("droneKpi").textContent = number(m.drones_per_day);
   $("droneKpiNote").textContent = `发电站 +${m.power_bonus}% · 等效 ${m.drone_hours_per_day} 小时`;
+  renderObjectiveComparison(data.objective,m);
   renderProductionMonitor(m);
   renderGoldMonitor(m);
   renderDroneMonitor(m);
@@ -254,21 +255,54 @@ function renderResults(data) {
   renderMorale(data.morale, data.rotation);
   const teams = data.rotation?.teams || {A:{support_rooms:data.support_rooms||[],rooms:data.rooms}};
   const workHours=data.rotation?.team_work_hours||{};
-  $("rooms").innerHTML = Object.entries(teams).map(([team,plan])=>`<section class="team-room-group"><div class="team-room-title"><strong>${team} 队</strong><span>${workHours[team] ? `每循环工作 ${workHours[team]} 小时` : "单班方案"}</span></div><div class="rooms">${[...(plan.support_rooms||[]),...(plan.rooms||[])].map(room => {
+  const cycleHours=Object.values(workHours).reduce((sum,value)=>sum+(+value||0),0)||24;
+  $("rooms").innerHTML = Object.entries(teams).map(([team,plan])=>{
+    const share=(+workHours[team]||cycleHours)/cycleHours, tm=plan.metrics||{};
+    const teamSummary=`<div class="team-cycle-summary"><div><span>周期占比</span><strong>${(share*100).toFixed(1)}%</strong><small>${workHours[team]||cycleHours}h / ${cycleHours}h</small></div><div><span>对图表龙门币贡献</span><strong>${number(Math.round((+tm.lmd_per_day||0)*share))}</strong><small>本队满日等效 ${number(Math.round(+tm.lmd_per_day||0))}</small></div><div><span>对图表经验贡献</span><strong>${number(Math.round((+tm.exp_per_day||0)*share))}</strong><small>本队满日等效 ${number(Math.round(+tm.exp_per_day||0))}</small></div><div><span>对图表赤金净流贡献</span><strong>${signed((+tm.gold_net_per_day||0)*share)}</strong><small>本队满日等效 ${signed(+tm.gold_net_per_day||0)}</small></div></div>`;
+    return `<section class="team-room-group"><div class="team-room-title"><strong>${team} 队</strong><span>${workHours[team] ? `每循环工作 ${workHours[team]} 小时` : "单班方案"}</span></div>${teamSummary}<div class="rooms">${[...(plan.support_rooms||[]),...(plan.rooms||[])].map(room => {
     const event=(data.rotation?.rooms||[]).find(row=>row.room===room.room)?.events?.find(item=>item.team===team);
     const rates=event ? Object.values(event.morale_rates||{}).map(Number) : [];
     const rateRange=rates.length ? `${Math.min(...rates)}${Math.max(...rates)!==Math.min(...rates)?`–${Math.max(...rates)}`:""}` : "—";
+    const output=roomOutput(room), totalEfficiency=room.key==="power" ? 5+(+room.efficiency||0) : (room.multiplier ? (+room.multiplier-1)*100 : null);
     return `
     <article class="room">
-      <div class="room-head"><h3>${escapeHtml(room.room)}</h3><span class="eff">+${room.efficiency}%</span></div>
+      <div class="room-head"><h3>${escapeHtml(room.room)}</h3><span class="eff">${totalEfficiency==null?`技能 +${room.efficiency}%`:`实际 +${totalEfficiency.toFixed(2)}%`}</span></div>
       <div class="names">${room.names.map(escapeHtml).join(" · ")}</div>
+      ${output?`<div class="room-output"><span>本队在岗时日产等效</span><strong>${escapeHtml(output)}</strong><small>折算到上方 24h 图表：${escapeHtml(roomOutput(room,share))}</small></div>`:""}
+      ${totalEfficiency!=null?`<div class="eff-ledger"><span>技能/状态加成 +${room.efficiency}%</span><span>${room.key==="power"?"发电站在岗基础 +5%":`${room.names.length} 名在岗基础 +${room.names.length}%`}</span><span>${room.key==="power"?`充能增幅 +${totalEfficiency.toFixed(2)}%`:`生产倍率 ×${(+room.multiplier).toFixed(4)}`}</span></div>`:""}
       <div class="skills">${room.details.map(d => `${escapeHtml(d.operator)}：${d.skills.map(s => escapeHtml(s.name)).join(" / ") || "无对应技能"}`).join("<br>")}</div>
       ${(room.mechanic_notes || []).length ? `<div class="skills">机制：${room.mechanic_notes.map(escapeHtml).join("；")}</div>` : ""}
       ${event ? `<div class="endurance"><span>实际在岗 ${event.scheduled_work_hours}h</span><span>本组合安全上限 ${event.safe_work_hours}h</span><span>心情消耗 ${rateRange}/h</span></div>` : ""}
       ${room.group ? `<span class="confidence">${escapeHtml(room.group)} · MAA 组合候选</span>` : `<span class="confidence">${room.confidence === "direct" ? "直接数值模型" : room.confidence === "state_model" ? "跨设施状态模型" : "保守估算"}</span>`}
-    </article>`}).join("")}</div></section>`).join("");
+    </article>`}).join("")}</div></section>`;
+  }).join("");
   runQuickSimulation(data);
   $("results").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+function roomOutput(room,scale=1) {
+  const n=value=>number(Math.round((+value||0)*scale));
+  if(room.key==="trade"&&room.trade) return `${n(room.trade.lmd_per_day)} 龙门币 / ${(+room.trade.gold_per_day*scale).toFixed(2)} 赤金消耗`;
+  if(room.key==="gold") return `${(20*(+room.multiplier||0)*scale).toFixed(2)} 赤金`;
+  if(room.key==="exp") return `${n(8000*(+room.multiplier||0))} EXP`;
+  if(room.key==="shard") return `${(24*(+room.multiplier||0)*scale).toFixed(2)} 源石碎片`;
+  if(room.key==="orundum"&&room.orundum) return `${n(room.orundum.orundum_per_day)} 合成玉 / ${(+room.orundum.shards_per_day*scale).toFixed(2)} 碎片消耗`;
+  if(room.key==="power") return `${(240*(5+(+room.efficiency||0))/100*scale).toFixed(2)} 架无人机增量`;
+  return "";
+}
+
+function renderObjectiveComparison(objective,currentMetrics) {
+  const comparison=objective?.comparison;
+  if(!comparison){$("objectiveComparison").classList.add("hidden");return;}
+  $("objectiveComparison").classList.remove("hidden");
+  const alt=comparison.alternate_metrics||{}, deltas=comparison.metric_deltas_alternate_minus_current||{};
+  const differences=comparison.room_differences||[];
+  const converged=!!comparison.selected_dominates_alternate;
+  const metric=(label,current,alternate,key)=>`<div><span>${label}</span><strong>${number(Math.round(+current||0))}</strong><small>备选 ${number(Math.round(+alternate||0))} · 差 ${signed(deltas[key]||0,3)}</small></div>`;
+  $("objectiveComparison").innerHTML=`<div class="comparison-head"><div><p class="eyebrow">OBJECTIVE CROSS-CHECK</p><h3>目标函数交叉审计</h3></div><span class="comparison-state ${converged?"same":"different"}">${converged?"两目标最终收敛":"目标产生取舍"}</span></div>
+    <p class="comparison-copy">当前：<b>${escapeHtml(objective.label)}</b>；同一 Box 完整重算：<b>${escapeHtml(comparison.alternate_label)}</b>。${converged?"当前完整排班在布局分数和等效理智分数上都不低于另一候选，因此两种目标会合法地返回同一方案；下方列出被淘汰候选的细微差别。":"两种完整排班分别在不同评分上占优，所以切换目标会改变最终方案。"}${comparison.cross_candidate_reranked?" 本次还纠正了顺序生成 A/B 后的候选反转。":""}</p>
+    <div class="comparison-metrics">${metric("龙门币 / 日",currentMetrics.lmd_per_day,alt.lmd_per_day,"lmd_per_day")}${metric("经验 / 日",currentMetrics.exp_per_day,alt.exp_per_day,"exp_per_day")}${metric("赤金制造 / 日",currentMetrics.gold_made_per_day,alt.gold_made_per_day,"gold_made_per_day")}${metric("赤金净流 / 日",currentMetrics.gold_net_per_day,alt.gold_net_per_day,"gold_net_per_day")}</div>
+    <div class="room-differences">${differences.map(row=>`<div><strong>${row.team} 班 · ${escapeHtml(row.room_type)}</strong><p><span>当前</span>${row.current.map(group=>escapeHtml(group.join(" / "))).join("；")}</p><p><span>备选</span>${row.alternate.map(group=>escapeHtml(group.join(" / "))).join("；")}</p></div>`).join("")||'<p class="side-note">忽略同类房间编号互换后，两套目标在当前 Box 得到相同组合；这表示本次候选收敛，不表示两个公式相同。</p>'}</div>`;
 }
 
 function signed(value, digits = 2) {
@@ -418,7 +452,9 @@ function renderYieldCurve(curve) {
   const rates=points.map(point=>+point.rates_per_hour[key]||0);
   const transitions=points.filter((point,index)=>index===0||point.team!==points[index-1].team)
     .map(point=>`${Math.floor(point.minute/60)}:${String(point.minute%60).padStart(2,"0")} ${point.team}班`).join(" → ");
-  $("yieldCurve").innerHTML=`<div class="curve-summary"><div><span>${key==="drones_per_day"?"24h 末库存":"24h 累计"}</span><strong>${signed(final)} ${escapeHtml(label)}</strong></div><div><span>${key==="drones_per_day"?"恢复速率范围":"小时速率范围"}</span><strong>${signed(Math.min(...rates))} ～ ${signed(Math.max(...rates))}</strong><small>每分钟 ${signed(Math.min(...rates)/60,3)} ～ ${signed(Math.max(...rates)/60,3)}</small></div><div><span>班次切换</span><strong>${escapeHtml(transitions)}</strong></div></div>
+  const hours=state.lastResult?.rotation?.team_work_hours||{}, cycle=Object.values(hours).reduce((sum,value)=>sum+(+value||0),0);
+  const weighting=Object.entries(hours).map(([team,value])=>`${team} ${value}h`).join(" + ");
+  $("yieldCurve").innerHTML=`<div class="curve-summary"><div><span>${key==="drones_per_day"?"24h 末库存":"24h 累计"}</span><strong>${signed(final)} ${escapeHtml(label)}</strong></div><div><span>${key==="drones_per_day"?"恢复速率范围":"小时速率范围"}</span><strong>${signed(Math.min(...rates))} ～ ${signed(Math.max(...rates))}</strong><small>每分钟 ${signed(Math.min(...rates)/60,3)} ～ ${signed(Math.max(...rates)/60,3)}</small></div><div><span>班次切换</span><strong>${escapeHtml(transitions)}</strong></div><div><span>与设施卡片统一口径</span><strong>${escapeHtml(weighting||"单班")}</strong><small>${cycle?`按 ${cycle}h 循环折算到 24h`:`直接使用单班日产`}</small></div></div>
     ${combinedCurveSvg(points,key,label,curve.drone_events)}<p class="side-note">${escapeHtml(curve.note)}</p>`;
 }
 

@@ -9,7 +9,7 @@ from maabase.mechanics import mechanic_is_partial, resolve_trade_mechanics, warm
 from maabase.model import _orundum_economics, _trade_economics, active_skills, evaluate_team, prepare_operators
 from maabase.morale import analyze_morale
 from maabase.state_model import BaseContext, _average_empty_order_slots
-from maabase.optimizer import _metrics, optimize
+from maabase.optimizer import GroupSpec, _metrics, _solve, optimize
 from maabase.scheduler import _morale_rates, _team_duration, build_rotation
 from maabase.simulator import simulate
 from maabase.valuation import EXP_VALUE, GOLD_VALUE, LMD_VALUE
@@ -83,6 +83,28 @@ class CoreTests(unittest.TestCase):
     def test_yituliu_default_money_exp_value_ratio(self):
         self.assertAlmostEqual(LMD_VALUE / EXP_VALUE, 229 / 145)
         self.assertAlmostEqual(GOLD_VALUE, EXP_VALUE * 400)
+
+    def test_layout_and_sanity_objectives_can_select_different_assignments(self):
+        shared = {"operators": ["shared"], "names": ["共享干员"], "efficiency": 0,
+                  "equivalent_efficiency": 0, "confidence": "direct"}
+        candidates = {
+            "trade": [
+                {**shared, "multiplier": 2.0, "trade": {"lmd_per_day": 30000, "gold_per_day": 200}},
+                {"operators": ["trade"], "names": ["贸易专员"], "efficiency": 0,
+                 "equivalent_efficiency": 0, "confidence": "direct", "multiplier": 1.0,
+                 "trade": {"lmd_per_day": 10000, "gold_per_day": 20}},
+            ],
+            "exp": [
+                {**shared, "multiplier": 2.0},
+                {"operators": ["exp"], "names": ["经验专员"], "efficiency": 0,
+                 "equivalent_efficiency": 0, "confidence": "direct", "multiplier": 1.0},
+            ],
+        }
+        groups = [GroupSpec("trade", 1), GroupSpec("exp", 1)]
+        layout, _ = _solve(candidates, groups, "layout_output")
+        sanity, _ = _solve(candidates, groups, "sanity_value")
+        self.assertEqual(layout["trade"][0]["operators"], ["shared"])
+        self.assertEqual(sanity["exp"][0]["operators"], ["shared"])
 
     def test_shamare_proviso_tequila_special_order_priority(self):
         team = [

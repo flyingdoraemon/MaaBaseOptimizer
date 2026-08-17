@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import heapq
 import itertools
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 from .model import generate_candidates, prepare_operators
 from .morale import analyze_morale, choose_dorm_helper
 from .scheduler import DRONE_CAPACITY, build_rotation
-from .valuation import candidate_daily_value, public_valuation
+from .valuation import candidate_daily_value, metrics_daily_value, metrics_layout_score, public_valuation
 from .state_model import (
     ABYSSAL_HUNTER_IDS,
     MONSTER_HUNTER_IDS,
@@ -45,6 +46,17 @@ def _utility(candidate: dict, product: str, objective_mode: str) -> float:
     return 0.0
 
 
+def _deterministic_tie_break(candidate: dict, product: str) -> float:
+    """Resolve exact objective ties reproducibly without changing real scores."""
+    identity = product + ":" + ",".join(sorted(str(value) for value in candidate.get("operators") or []))
+    rank = int.from_bytes(hashlib.sha256(identity.encode("utf-8")).digest()[:8], "big") / float(2**64)
+    return rank * 1e-7
+
+
+def _candidate_score(candidate: dict, product: str, objective_mode: str) -> float:
+    return _utility(candidate, product, objective_mode) + _deterministic_tie_break(candidate, product)
+
+
 def _solve_pulp(
     candidates: dict[str, list[dict]], groups: list[GroupSpec], objective_mode: str,
     reusable_ids: set[str] | None = None,
@@ -77,7 +89,7 @@ def _solve_pulp(
             for i, candidate in enumerate(candidates[group.key])
         ) <= 1
     problem += pulp.lpSum(
-        _utility(candidate, group.key, objective_mode) * variables[(group.key, i)]
+        _candidate_score(candidate, group.key, objective_mode) * variables[(group.key, i)]
         for group in groups
         for i, candidate in enumerate(candidates[group.key])
     )
@@ -112,7 +124,7 @@ def _solve_beam(
                         continue
                     new_selected = {key: list(value) for key, value in selected.items()}
                     new_selected.setdefault(group.key, []).append(candidate)
-                    item = (score + _utility(candidate, group.key, objective_mode), next(counter), used | op_set, new_selected)
+                    item = (score + _candidate_score(candidate, group.key, objective_mode), next(counter), used | op_set, new_selected)
                     if len(heap) < width * 2:
                         heapq.heappush(heap, item)
                     elif item[0] > heap[0][0]:
@@ -401,6 +413,27 @@ def _result_assignment_signature(result: dict) -> tuple:
         }))
         for team, plan in sorted(teams.items())
     )
+
+
+def _result_room_differences(current: dict, alternate: dict) -> list[dict]:
+    current_teams = (current.get("rotation") or {}).get("teams") or {"A": current}
+    alternate_teams = (alternate.get("rotation") or {}).get("teams") or {"A": alternate}
+    labels = {"trade": "龙门贸易站", "orundum": "源石贸易站", "gold": "赤金制造站",
+              "exp": "作战记录制造站", "shard": "源石碎片制造站", "power": "发电站"}
+    rows = []
+    for team in sorted(set(current_teams) | set(alternate_teams)):
+        current_rooms = current_teams.get(team, {}).get("rooms", [])
+        alternate_rooms = alternate_teams.get(team, {}).get("rooms", [])
+        for key in sorted({room.get("key") for room in current_rooms + alternate_rooms}):
+            current_groups = sorted(tuple(sorted(room.get("names") or [])) for room in current_rooms if room.get("key") == key)
+            alternate_groups = sorted(tuple(sorted(room.get("names") or [])) for room in alternate_rooms if room.get("key") == key)
+            if current_groups != alternate_groups:
+                rows.append({
+                    "team": team, "key": key, "room_type": labels.get(key, key),
+                    "current": [list(group) for group in current_groups],
+                    "alternate": [list(group) for group in alternate_groups],
+                })
+    return rows
 
 
 def _control_row(team: list[dict], context: BaseContext) -> dict | None:
@@ -729,11 +762,11 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                    "exp": exp_count, "shard": shard_count, "power": power_count},
         "objective": {
             "mode": objective_mode,
-            "label": "一图流等效理智价值" if objective_mode == "sanity_value" else "按用户选定布局分别最大化产出",
+            "label": "固定产品布局：一图流等效理智最大化" if objective_mode == "sanity_value" else "固定产品布局：总产能等权最大化",
             "hard_constraints": f"{lmd_trade_count} 龙门贸易站 / {orundum_count} 源石贸易站 / {gold_count} 赤金站 / {exp_count} 经验站 / {shard_count} 碎片站",
             "comparison": {
                 "alternate_mode": alternate_mode,
-                "alternate_label": "一图流等效理智价值" if alternate_mode == "sanity_value" else "按用户选定布局分别最大化产出",
+                "alternate_label": "固定产品布局：一图流等效理智最大化" if alternate_mode == "sanity_value" else "固定产品布局：总产能等权最大化",
                 "same_semantic_assignment": same_assignment,
                 "scope": "同一控制中枢状态与同一候选集",
                 "solver": alternate_solver,
@@ -876,18 +909,69 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
             {**payload, "objective_mode": alternate_mode, "_objective_audit_internal": True},
             catalog, include_frontier=False,
         )
-        comparison = result["objective"]["comparison"]
-        comparison.update({
+        primary_result = result
+        primary_metrics = primary_result["rotation"]["average_metrics"]
+        alternate_metrics = alternate_result["rotation"]["average_metrics"]
+
+        def full_score(metrics: dict, mode: str) -> float:
+            return metrics_daily_value(metrics) if mode == "sanity_value" else metrics_layout_score(metrics)
+
+        # A/B states are generated sequentially, so the plan seeded by the
+        # other scalar objective can occasionally dominate after full-cycle
+        # duration and drone accounting. Re-rank both completed plans under
+        # the requested objective instead of returning the inferior seed.
+        alternate_wins = full_score(alternate_metrics, objective_mode) > full_score(primary_metrics, objective_mode) + 1e-9
+        if alternate_wins:
+            result, rejected_result = alternate_result, primary_result
+            selected_origin = alternate_mode
+            result["solver"] += f" · 完整周期按 {objective_mode} 复排后采用交叉候选"
+        else:
+            result, rejected_result = primary_result, alternate_result
+            selected_origin = objective_mode
+        current_metrics = result["rotation"]["average_metrics"]
+        rejected_metrics = rejected_result["rotation"]["average_metrics"]
+        requested_label = "固定产品布局：一图流等效理智最大化" if objective_mode == "sanity_value" else "固定产品布局：总产能等权最大化"
+        alternate_label = "固定产品布局：一图流等效理智最大化" if alternate_mode == "sanity_value" else "固定产品布局：总产能等权最大化"
+        result["objective"].update({
+            "mode": objective_mode,
+            "label": requested_label,
+        })
+        result["rotation"]["objective_mode"] = objective_mode
+        comparison = {
+            "alternate_mode": alternate_mode,
+            "alternate_label": alternate_label,
             "scope": "完整 A/B 排班、工时与控制中枢搜索",
-            "same_semantic_assignment": _result_assignment_signature(result) == _result_assignment_signature(alternate_result),
+            "same_semantic_assignment": _result_assignment_signature(result) == _result_assignment_signature(rejected_result),
             "same_work_durations": (
                 (result["rotation"].get("team_work_hours") or {})
-                == ((alternate_result.get("rotation") or {}).get("team_work_hours") or {})
+                == ((rejected_result.get("rotation") or {}).get("team_work_hours") or {})
             ),
             "alternate_metrics": {
-                key: (alternate_result.get("rotation") or {}).get("average_metrics", alternate_result["metrics"]).get(key)
+                key: rejected_metrics.get(key)
                 for key in ("lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day", "gold_net_per_day", "orundum_per_day")
             },
-            "alternate_work_durations": (alternate_result.get("rotation") or {}).get("team_work_hours"),
-        })
+            "alternate_work_durations": (rejected_result.get("rotation") or {}).get("team_work_hours"),
+            "room_differences": _result_room_differences(result, rejected_result),
+            "selected_candidate_origin": selected_origin,
+            "cross_candidate_reranked": alternate_wins,
+            "selected_dominates_alternate": (
+                metrics_layout_score(current_metrics) >= metrics_layout_score(rejected_metrics) - 1e-9
+                and metrics_daily_value(current_metrics) >= metrics_daily_value(rejected_metrics) - 1e-9
+            ),
+            "full_schedule_scores": {
+              "current": {
+                "layout_output": round(metrics_layout_score(current_metrics), 6),
+                "sanity_value": round(metrics_daily_value(current_metrics), 6),
+              },
+              "alternate": {
+                "layout_output": round(metrics_layout_score(rejected_metrics), 6),
+                "sanity_value": round(metrics_daily_value(rejected_metrics), 6),
+              },
+            },
+            "metric_deltas_alternate_minus_current": {
+                key: round(float(rejected_metrics.get(key, 0) or 0) - float(current_metrics.get(key, 0) or 0), 3)
+                for key in ("lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day", "gold_net_per_day", "orundum_per_day")
+            },
+        }
+        result["objective"]["comparison"] = comparison
     return result
