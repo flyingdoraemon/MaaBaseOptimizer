@@ -77,6 +77,18 @@ function skillIcon(icon, name) {
   const source=`https://torappu.prts.wiki/assets/build_skill_icon/${encodeURIComponent(String(icon))}.png`;
   return `<img class="skill-icon" src="${source}" alt="" title="${escapeHtml(name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.classList.add('asset-failed')">`;
 }
+function eliteText(profile) {
+  if(!profile) return "";
+  return `E${+profile.elite||0}`;
+}
+function operatorBadge(id,name,profile,className="operator-avatar") {
+  return `<span class="operator-badge" title="${escapeHtml(name)} · 精英 ${+profile?.elite||0} · Lv.${+profile?.level||1}">${operatorAvatar(id,name,className)}<i>${eliteText(profile)}</i><b>${escapeHtml(name)}</b></span>`;
+}
+function skillToken(skill) {
+  const unlock=skill.unlock||{};
+  const unlockText=unlock.phase==null?"解锁阶段未知":`精英 ${unlock.phase} · Lv.${unlock.level||1} 解锁`;
+  return `<span class="skill-token" tabindex="0">${skillIcon(skill.icon,skill.name)}<em>${escapeHtml(skill.name)}</em><span class="skill-tooltip"><b>${escapeHtml(skill.name)}</b><small>${escapeHtml(unlockText)}</small>${escapeHtml(skill.description||"暂无技能说明")}</span></span>`;
+}
 
 async function loadCatalog() {
   const data = await request("/api/operators");
@@ -202,19 +214,6 @@ function updateProductControls() {
   $("orundumTrades").innerHTML=Array.from({length:layout.trade+1},(_,i)=>`<option value="${i}">${i} 间</option>`).join("");
   $("orundumTrades").value=shard ? Math.max(1,Math.min(prev||1,layout.trade)) : Math.min(prev,layout.trade);
   $("shardRecipe").disabled=!shard;
-  renderBaseLayoutPreview(layout,exp,shard,gold,+$("orundumTrades").value||0);
-}
-function renderBaseLayoutPreview(layout,exp,shard,gold,orundum) {
-  const cells=Array(25).fill(null), production=[];
-  for(let i=0;i<layout.trade;i++) production.push({tone:"trade",label:i<orundum?"源石单":"贸易"});
-  for(let i=0;i<gold;i++) production.push({tone:"gold",label:"赤金"});
-  for(let i=0;i<exp;i++) production.push({tone:"exp",label:"经验"});
-  for(let i=0;i<shard;i++) production.push({tone:"shard",label:"碎片"});
-  for(let i=0;i<3;i++) production.push({tone:"power",label:"发电"});
-  const productionCells=[5,6,7,10,11,12,15,16,17];
-  production.forEach((room,index)=>cells[productionCells[index]]=room);
-  [[3,"control","中枢"],[4,"support","会客"],[8,"dorm","宿舍"],[9,"support","加工"],[13,"dorm","宿舍"],[14,"support","办公室"],[18,"dorm","宿舍"],[19,"support","训练"],[23,"dorm","宿舍"]].forEach(([index,tone,label])=>cells[index]={tone,label});
-  $("baseLayoutPreview").innerHTML=cells.map((room,index)=>room?`<span class="layout-cell ${room.tone}" title="${room.label}"><b>${room.label}</b></span>`:`<i class="layout-cell empty-cell"></i>`).join("");
 }
 $("baseLayout").addEventListener("change",updateLayoutControls);
 $("expFactories").addEventListener("change",updateProductControls);
@@ -307,11 +306,11 @@ function renderResults(data) {
     return `
     <article class="room">
       <div class="room-head"><h3>${escapeHtml(room.room)}</h3><span class="eff">${totalEfficiency==null?`技能 +${room.efficiency}%`:`实际 +${totalEfficiency.toFixed(2)}%`}</span></div>
-      <div class="names operator-line">${room.names.map((name,index)=>`<span>${operatorAvatar(room.operators[index],name)}<b>${escapeHtml(name)}</b></span>`).join("")}</div>
+      <div class="names operator-line">${room.names.map((name,index)=>operatorBadge(room.operators[index],name,room.operator_profiles?.[index])).join("")}</div>
       ${output?`<div class="room-output"><span>本队在岗时日产等效</span><strong>${escapeHtml(output)}</strong><small>按 ${(roomShare*24).toFixed(0)}h 在岗折算：${escapeHtml(roomOutput(room,roomShare))}</small></div>`:""}
       ${event ? `<div class="endurance"><span>实际在岗 ${event.scheduled_work_hours}h</span><span>本组合安全上限 ${event.safe_work_hours}h</span><span>心情消耗 ${rateRange}/h</span></div>` : ""}
       ${room.group ? `<span class="confidence">${escapeHtml(room.group)} · MAA 组合候选</span>` : `<span class="confidence">${room.confidence === "direct" ? "直接数值模型" : room.confidence === "state_model" ? "跨设施状态模型" : "保守估算"}</span>`}
-      <details class="room-details"><summary>技能与计算明细</summary><div class="eff-ledger">${totalEfficiency!=null?`<span>技能/状态 +${room.efficiency}%</span><span>${room.key==="power"?"基础 +5%":`基础 +${room.names.length}%`}</span><span>${room.key==="power"?`充能 +${totalEfficiency.toFixed(2)}%`:`倍率 ×${(+room.multiplier).toFixed(4)}`}</span>`:""}</div><div class="skills">${room.details.map(d => `<span class="skill-row"><b>${escapeHtml(d.operator)}</b>${d.skills.length?d.skills.map(s=>`${skillIcon(s.icon,s.name)}<em title="${escapeHtml(s.description||"")}">${escapeHtml(s.name)}</em>`).join(""):"无对应技能"}</span>`).join("")}</div>${(room.mechanic_notes || []).length ? `<div class="skills">机制：${room.mechanic_notes.map(escapeHtml).join("；")}</div>` : ""}</details>
+      <details class="room-details"><summary>技能与计算明细</summary><div class="eff-ledger">${totalEfficiency!=null?`<span>技能/状态 +${room.efficiency}%</span><span>${room.key==="power"?"基础 +5%":`基础 +${room.names.length}%`}</span><span>${room.key==="power"?`充能 +${totalEfficiency.toFixed(2)}%`:`倍率 ×${(+room.multiplier).toFixed(4)}`}</span>`:""}</div><div class="skills">${room.details.map(d => `<span class="skill-row"><b>${escapeHtml(d.operator)}</b>${d.skills.length?d.skills.map(skillToken).join(""):"无对应技能"}</span>`).join("")}</div>${(room.mechanic_notes || []).length ? `<div class="skills">机制：${room.mechanic_notes.map(escapeHtml).join("；")}</div>` : ""}</details>
     </article>`}).join("")}</div></section>`;
   }).join("");
   runQuickSimulation(data);
@@ -320,7 +319,7 @@ function renderResults(data) {
 
 function renderAllocationAudit(audit) {
   if(!audit){$("allocationAudit").innerHTML='<p class="side-note">暂无分配审计。</p>';return;}
-  const rows=(audit.multi_facility_operators||[]).map(row=>`<div class="allocation-row"><span>${operatorAvatar(row.operator_id,row.operator)}<b>${escapeHtml(row.operator)}</b></span><small>${row.skills.map(skill=>`${skillIcon(skill.icon,skill.name)}${escapeHtml(skill.facility)} · ${escapeHtml(skill.name)}`).join(" / ")}</small><strong>${Object.entries(row.assignments||{}).map(([team,rooms])=>`${team}：${rooms.map(escapeHtml).join("、")}`).join(" · ")||"本方案未上班"}</strong></div>`).join("");
+  const rows=(audit.multi_facility_operators||[]).map(row=>`<div class="allocation-row"><span>${operatorAvatar(row.operator_id,row.operator)}<b>${escapeHtml(row.operator)}</b></span><small>${row.skills.map(skill=>`<span>${escapeHtml(skill.facility)} ${skillToken(skill)}</span>`).join("")}</small><strong>${Object.entries(row.assignments||{}).map(([team,rooms])=>`${team}：${rooms.map(escapeHtml).join("、")}`).join(" · ")||"本方案未上班"}</strong></div>`).join("");
   const duplicate=(audit.simultaneous_duplicates||[]).length;
   $("allocationAudit").innerHTML=`<p class="side-note">${escapeHtml(audit.constraint)} ${escapeHtml(audit.rotation_scope)}</p><div class="allocation-status ${duplicate?"warn":"ok"}">${duplicate?`发现 ${duplicate} 处同班重复，结果无效。`:"✓ 同班干员互斥校验通过"}</div>${rows||'<p class="side-note">当前 Box 没有已解锁两种生产设施技能的干员。</p>'}`;
 }
@@ -429,39 +428,29 @@ function hourLabel(hour) {
 function renderRotation(rotation) {
   if (!rotation) {
     $("rotationPattern").textContent="未生成第二队";
-    $("shiftStrip").innerHTML="";
     $("operatorTimeline").innerHTML='<p class="side-note">当前 Box 不足以生成两套互斥班组。</p>';
     return;
   }
   const staggered=rotation.schedule_mode==="staggered";
   const durationText=Object.entries(rotation.team_work_hours||{}).map(([team,h])=>`${team} 均值 ${h}h`).join(" / ");
-  $("rotationPattern").textContent=staggered ? `各房间独立 · 每 ${rotation.collection_interval_hours}h 可换班` : `${durationText || rotation.pattern.join(" → ")} · 循环 ${rotation.natural_cycle_hours || rotation.cycle_hours}h · 收取 ${rotation.collection_interval_hours || rotation.shift_hours}h`;
-  $("shiftStrip").innerHTML=staggered ? (rotation.handover_events||[]).map((node,index)=>`<details class="shift-chip">
-    <summary><strong>${node.time}h 换班</strong><span>${node.changes.length} 个房间</span></summary>
-    <div>${node.changes.map(change=>`<p><b>${escapeHtml(change.room)}</b><span>切至 ${change.team} · ${change.names.map(escapeHtml).join(" / ")}</span></p>`).join("")}</div>
-  </details>`).join("") : rotation.shifts.map(shift=>`<details class="shift-chip team-${shift.team.toLowerCase()}">
-    <summary><strong>第 ${shift.index} 班 · ${shift.team} 队</strong><span>${hourLabel(shift.start)}–${hourLabel(shift.end)}</span></summary>
-    <div>${shift.rooms.map(room=>`<p><b>${escapeHtml(room.room)}</b><span>${room.names.map(escapeHtml).join(" / ")}</span>${room.time_profiles.map(profile=>`<em>${escapeHtml(profile.operator)} ${escapeHtml(profile.label)}：班均 +${profile.average_percent}%</em>`).join("")}</p>`).join("")}</div>
-  </details>`).join("");
+  const handoverTimes=(rotation.handover_events||[]).map(node=>`${node.time}h`).join(" / ");
+  $("rotationPattern").textContent=staggered ? `换班 ${handoverTimes||"—"} · 上线间隔 ${rotation.collection_interval_hours}h` : `${durationText || rotation.pattern.join(" → ")} · 循环 ${rotation.natural_cycle_hours || rotation.cycle_hours}h`;
   const axisStep=rotation.collection_interval_hours || 4;
   const tickCount=Math.floor(rotation.cycle_hours/axisStep);
   const ticks=Array.from({length:tickCount+1},(_,i)=>`<span style="left:${i*axisStep/rotation.cycle_hours*100}%">${i*axisStep}h</span>`).join("");
   const collectionLines=Array.from({length:tickCount-1},(_,i)=>`<i class="collection-line" style="left:${(i+1)*axisStep/rotation.cycle_hours*100}%" title="${(i+1)*axisStep}h 统一收取"></i>`).join("");
+  const droneEvents=rotation.production_curve?.drone_events||[];
   const rows=(rotation.rooms||[]).map(room=>`<div class="timeline-row room-timeline-row">
     <strong title="${escapeHtml(room.room)}">${escapeHtml(room.room)}</strong>
-    <div class="timeline-lane">${collectionLines}${room.events.map(event=>{
+    <div class="timeline-lane">${collectionLines}${droneEvents.flatMap(event=>(event.targets||[]).filter(target=>String(target.target||"").includes(room.room)).map(target=>`<i class="timeline-drone" style="left:${Math.min(99.2,event.minute/60/rotation.cycle_hours*100)}%" title="${escapeHtml(`${event.minute/60}h · 无人机 ${Math.round(target.drones)} 架 → ${target.label}`)}">⚡</i>`)).join("")}${room.events.map(event=>{
       const left=event.start/rotation.cycle_hours*100, width=(event.end-event.start)/rotation.cycle_hours*100;
       const skills=(event.details||[]).map(d=>`${d.operator}：${(d.skills||[]).map(s=>s.name).join("/")||"无对应技能"}`).join("；");
       const phases=(event.time_profiles||[]).map(p=>`${p.operator} ${p.label} 班均+${p.average_percent}%`).join("；");
       const title=`${hourLabel(event.start)}–${hourLabel(event.end)} · ${event.team} 班 · 实际 ${event.scheduled_work_hours}h / 本组合安全上限 ${event.safe_work_hours}h · 效率 +${event.efficiency}% · 最低结束心情 ${event.morale_min_end} · ${event.names.join(" / ")}${skills?` · ${skills}`:""}${phases?` · ${phases}`:""}`;
-      return `<i class="timeline-event room-event work-${event.team.toLowerCase()}" style="left:${left}%;width:${width}%" title="${escapeHtml(title)}"><span class="room-team">${event.team}</span><span class="operator-chips">${event.names.map((name,index)=>`${operatorAvatar(event.operators[index],name,"timeline-avatar")}<b>${escapeHtml(name)}</b>`).join("")}</span></i>`;
+      return `<i class="timeline-event room-event work-${event.team.toLowerCase()}" style="left:${left}%;width:${width}%" title="${escapeHtml(title)}"><span class="room-team">${event.team}</span><span class="operator-chips">${event.names.map((name,index)=>operatorBadge(event.operators[index],name,event.operator_profiles?.[index],"timeline-avatar")).join("")}</span></i>`;
     }).join("")}</div>
   </div>`).join("");
-  const inventoryNote=rotation.inventory_policy?.note || "";
-  const dormNote=rotation.dormitory?.note || "";
-  const droneEvents=rotation.production_curve?.drone_events||[];
-  const eventLedger=droneEvents.length?`<div class="drone-event-ledger"><strong>无人机收取/投入事件</strong>${droneEvents.map(event=>`<span><b>${event.minute/60}h · ${event.team}班 · ${number(Math.round(event.drones_spent))} 架</b>${(event.targets||[]).map(target=>`${escapeHtml(target.label)} ${number(Math.round(target.drones))}`).join(" / ")||"保留"}</span>`).join("")}</div>`:"";
-  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>房间</strong><div>${ticks}</div></div>${rows}${eventLedger}<p class="timeline-note">${escapeHtml(rotation.morale.note)} 排程校验：${rotation.morale.feasible ? "两队均可在下次上班前恢复" : "存在恢复时间或床位小时不足"}。${escapeHtml(dormNote)} ${escapeHtml(inventoryNote)} 悬停班次查看干员、技能、效率与结束心情。</p>`;
+  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>设施</strong><div>${ticks}</div></div>${rows}`;
 }
 
 const curveLabels={lmd_per_day:"龙门币",exp_per_day:"作战经验",gold_net_per_day:"赤金净流量",gold_made_per_day:"赤金制造",gold_used_per_day:"赤金消耗",orundum_per_day:"合成玉",drones_per_day:"无人机库存"};

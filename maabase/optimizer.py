@@ -489,7 +489,9 @@ def _production_allocation_audit(result: dict, roster: list[dict], catalog: dict
             "eligible_facilities": [facility_names[item] for item in facilities],
             "assignments": assigned.get(operator.get("id"), {}),
             "skills": [
-                {"name": skill.get("name"), "facility": facility_names.get(skill.get("room")), "icon": skill.get("icon")}
+                {"name": skill.get("name"), "description": skill.get("description"),
+                 "facility": facility_names.get(skill.get("room")), "icon": skill.get("icon"),
+                 "unlock": skill.get("unlock")}
                 for skill in skills if skill.get("room") in facility_names
             ],
         })
@@ -530,6 +532,12 @@ def _control_row(team: list[dict], context: BaseContext) -> dict | None:
         "room": "控制中枢",
         "operators": [operator["id"] for operator in team],
         "names": [operator["name"] for operator in team],
+        "operator_profiles": [
+            {"id": operator["id"], "name": operator["name"],
+             "elite": int(operator.get("elite", operator.get("phase", 0))),
+             "level": int(operator.get("level", 1))}
+            for operator in team
+        ],
         "efficiency": context.control_trade_speed + context.control_factory_speed,
         "equivalent_efficiency": context.control_trade_speed + context.control_factory_speed,
         "confidence": "state_model",
@@ -541,7 +549,7 @@ def _control_row(team: list[dict], context: BaseContext) -> dict | None:
                 "operator": operator["name"],
                 "skills": [
                     {"name": skill["name"], "description": skill["description"], "value": 0,
-                     "icon": skill.get("icon", "")}
+                     "icon": skill.get("icon", ""), "unlock": skill.get("unlock")}
                     for skill in operator["skills"] if skill.get("room") == "CONTROL"
                 ],
                 "value": 0,
@@ -581,13 +589,20 @@ def _support_rows(
             "key": key, "room": room_name,
             "operators": [operator["id"] for operator in team],
             "names": [operator["name"] for operator in team],
+            "operator_profiles": [
+                {"id": operator["id"], "name": operator["name"],
+                 "elite": int(operator.get("elite", operator.get("phase", 0))),
+                 "level": int(operator.get("level", 1))}
+                for operator in team
+            ],
             "efficiency": round(sum(max(0.0, skill_score(operator, skill_room)) for operator in team), 3),
             "equivalent_efficiency": 0, "confidence": "direct", "group": None,
             "unresolved": [], "mechanic_notes": [], "time_profiles": [], "context_effects": [],
             "details": [{
                 "operator": operator["name"],
                 "skills": [{"name": skill["name"], "description": skill["description"],
-                            "value": skill.get("efficiency", 0), "icon": skill.get("icon", "")}
+                            "value": skill.get("efficiency", 0), "icon": skill.get("icon", ""),
+                            "unlock": skill.get("unlock")}
                            for skill in operator["skills"] if skill.get("room") == skill_room],
                 "value": max(0.0, skill_score(operator, skill_room)),
             } for operator in team],

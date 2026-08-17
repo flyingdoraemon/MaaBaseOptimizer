@@ -228,6 +228,7 @@ def evaluate_team(team: Iterable[dict], product: str, catalog: dict, context: Ba
                 "description": skill["description"],
                 "value": amount,
                 "icon": icon,
+                "unlock": skill.get("unlock"),
             })
             description = skill.get("description", "")
             affects_output = any(word in description for word in ("生产力", "订单获取效率", "充能速度"))
@@ -259,6 +260,11 @@ def evaluate_team(team: Iterable[dict], product: str, catalog: dict, context: Ba
     return {
         "operators": [x["id"] for x in team],
         "names": [x["name"] for x in team],
+        "operator_profiles": [
+            {"id": x["id"], "name": x["name"], "elite": int(x.get("elite", x.get("phase", 0))),
+             "level": int(x.get("level", 1))}
+            for x in team
+        ],
         "product": product,
         "efficiency": round(speed_efficiency, 3),
         "equivalent_efficiency": round(rank_efficiency, 3),

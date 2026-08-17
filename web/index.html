@@ -31,7 +31,6 @@
         <div class="rail-heading"><div><span class="section-index">02</span><h2>生产方案</h2></div></div>
         <div class="control-stack primary-controls">
           <label><span>基建布局</span><select id="baseLayout"><option value="243">2-4-3</option><option value="153">1-5-3</option><option value="333">3-3-3</option></select></label>
-          <div id="baseLayoutPreview" class="base-layout-preview" aria-label="基建设施布局预览"></div>
           <div class="split-control"><label><span>作战记录</span><select id="expFactories"></select></label><label><span>源石碎片</span><select id="shardFactories"></select></label></div>
           <p class="inline-hint" id="goldFactoryHint"></p>
           <label><span>源石订单</span><select id="orundumTrades"></select></label>
@@ -82,7 +81,7 @@
         </div>
 
         <div class="tab-panel" data-tab-panel="schedule">
-          <article class="panel rotation-panel"><div class="card-heading"><div><span class="card-kicker">ROTATION</span><h2>轮换运行图</h2></div><span id="rotationPattern" class="live-pill">等待排程</span></div><div id="shiftStrip" class="shift-strip"></div><div class="timeline-legend"><span><i class="work-a"></i>A 班</span><span><i class="work-b"></i>B 班</span><span><i class="collect"></i>收取</span></div><div id="operatorTimeline" class="operator-timeline"></div></article>
+          <article class="panel rotation-panel"><div class="card-heading"><div><span class="card-kicker">ROTATION</span><h2>轮换运行图</h2></div><span id="rotationPattern" class="live-pill">等待排程</span></div><div class="timeline-legend"><span><i class="work-a"></i>A 班</span><span><i class="work-b"></i>B 班</span><span><i class="collect"></i>收取</span><span><i class="drone"></i>无人机</span></div><div id="operatorTimeline" class="operator-timeline"></div></article>
           <div class="room-section-head"><div><span class="card-kicker">ASSIGNMENT</span><h2>设施排班</h2></div><span>全局去重</span></div><div id="rooms" class="team-rooms"></div>
         </div>
 

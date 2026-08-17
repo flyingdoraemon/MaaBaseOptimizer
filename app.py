@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 CATALOG = json.loads((ROOT / "data" / "catalog.json").read_text(encoding="utf-8"))
 ROSTER_PATH = ROOT / "data" / "user_roster.json"
-APP_REVISION = "2026.08.17-staggered-echarts-v11"
+APP_REVISION = "2026.08.17-schedule-readability-v12"
 SCAN_SESSIONS: dict[str, dict] = {}
 SCAN_LOCK = threading.Lock()
 
@@ -66,7 +66,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-MaaBaseOptimizer-Revision", APP_REVISION)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The browser may cancel an older optimization request after the
+            # user changes settings or refreshes.  The calculation can finish
+            # normally without turning that client disconnect into a 500 loop.
+            return
 
     def _payload(self) -> object:
         length = int(self.headers.get("Content-Length", "0"))

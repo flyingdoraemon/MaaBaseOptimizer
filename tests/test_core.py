@@ -35,6 +35,12 @@ class CoreTests(unittest.TestCase):
         skills_e2 = active_skills({"id": "char_241_panda", "elite": 2, "level": 1}, self.catalog)
         self.assertTrue(any("30%" in x["description"] for x in skills_e0))
         self.assertTrue(any("35%" in x["description"] for x in skills_e2))
+        candidate = evaluate_team(
+            prepare_operators([{"id": "char_241_panda", "elite": 2, "level": 1}], self.catalog),
+            "trade", self.catalog,
+        )
+        self.assertEqual(candidate["operator_profiles"][0]["elite"], 2)
+        self.assertTrue(all(skill.get("unlock") for skill in candidate["details"][0]["skills"]))
 
     def test_global_schedule_has_no_duplicate_operator(self):
         roster = [
