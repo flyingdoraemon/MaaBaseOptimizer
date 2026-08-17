@@ -60,6 +60,12 @@ def build(building_path: Path, character_path: Path, maa_path: Path) -> dict:
                 "id": char_id,
                 "name": char["name"],
                 "rarity": int(char.get("rarity", 0)) + 1,
+                # Keep affiliation metadata in the calculation catalog.  Team,
+                # group and nation membership are data, not operator-specific
+                # formula branches, and drive many cross-room RIIC skills.
+                "nation_id": char.get("nationId"),
+                "group_id": char.get("groupId"),
+                "team_id": char.get("teamId"),
                 "slots": slots,
             }
 
@@ -130,4 +136,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -15,6 +15,7 @@ from .valuation import candidate_daily_value, metrics_daily_value, metrics_layou
 from .state_model import (
     ABYSSAL_HUNTER_IDS,
     MONSTER_HUNTER_IDS,
+    SUI_IDS,
     BaseContext,
     mechanism_coverage,
     platform_count,
@@ -661,7 +662,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     # downstream room solution.  On very large synthetic catalogs, retain the
     # former single-state path to keep regression runs laptop-friendly.
     control_pool = [operator for operator in operators if operator["id"] not in reusable_ids]
-    control_options = select_control_options(control_pool, base_context, 4 if len(operators) <= 180 else 1)
+    control_options = select_control_options(control_pool, base_context, 12 if len(operators) <= 180 else 2)
     best_plan: tuple[float, list[dict], BaseContext, dict, str, dict] | None = None
     for control_team_option, context_option in control_options:
         control_ids = {operator["id"] for operator in control_team_option}
@@ -673,6 +674,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
         selected_option: dict[str, list[dict]] = {}
         candidates_option: dict[str, list[dict]] = {}
         solver_option = ""
+        production_by_id = {operator["id"]: operator for operator in production_operators}
         for attempt in range(5):
             candidates_option = {}
             for group in groups:
@@ -705,7 +707,55 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 operator in ABYSSAL_HUNTER_IDS
                 for room in factory_rooms for operator in room.get("operators", [])
             )
-            if count == context_option.platform_power_count and abyssal_count == context_option.abyssal_factory_count:
+            assigned_ids = {
+                operator_id
+                for rooms in selected_option.values() for room in rooms
+                for operator_id in room.get("operators", [])
+            } | control_ids
+            assigned_operators = [
+                operator for operator in operators if operator["id"] in assigned_ids
+            ]
+            group_counts: dict[str, int] = {}
+            nation_counts: dict[str, int] = {}
+            for operator in assigned_operators:
+                if operator.get("group_id"):
+                    group_counts[operator["group_id"]] = group_counts.get(operator["group_id"], 0) + 1
+                if operator.get("nation_id"):
+                    nation_counts[operator["nation_id"]] = nation_counts.get(operator["nation_id"], 0) + 1
+            power_nation_counts: dict[str, int] = {}
+            for room in selected_option.get("power", []):
+                for operator_id in room.get("operators", []):
+                    operator = production_by_id.get(operator_id)
+                    if operator and operator.get("nation_id"):
+                        nation = operator["nation_id"]
+                        power_nation_counts[nation] = power_nation_counts.get(nation, 0) + 1
+            trade_operator_ids = sorted({
+                operator_id
+                for key in ("trade", "orundum") for room in selected_option.get(key, [])
+                for operator_id in room.get("operators", [])
+            })
+            all_selected_rooms = [room for rooms in selected_option.values() for room in rooms]
+            elite_facilities = sum(
+                any(int((production_by_id.get(operator_id) or {}).get("elite", 0)) >= 1
+                    for operator_id in room.get("operators", []))
+                for room in all_selected_rooms
+            ) + int(any(int(operator.get("elite", 0)) >= 1 for operator in control_team_option))
+            sui_facilities = sum(
+                any(operator_id in SUI_IDS for operator_id in room.get("operators", []))
+                for room in all_selected_rooms
+            ) + int(any(operator["id"] in SUI_IDS for operator in control_team_option))
+            state_stable = (
+                count == context_option.platform_power_count
+                and abyssal_count == context_option.abyssal_factory_count
+                and group_counts == context_option.working_group_counts
+                and nation_counts == context_option.working_nation_counts
+                and power_nation_counts == context_option.power_nation_counts
+                and sorted(assigned_ids) == context_option.working_operator_ids
+                and trade_operator_ids == context_option.trade_operator_ids
+                and elite_facilities == context_option.elite_staffed_facility_count
+                and sui_facilities == context_option.sui_staffed_facility_count
+            )
+            if state_stable:
                 break
             if attempt == 4:
                 context_option.audit.append("离散跨房间状态在 5 次迭代内未收敛；当前结果按最后一次状态估算")
@@ -715,6 +765,13 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
             if count:
                 context_option.audit.append(f"发电站：作业平台 {count} 台")
             context_option.abyssal_factory_count = abyssal_count
+            context_option.working_group_counts = group_counts
+            context_option.working_nation_counts = nation_counts
+            context_option.power_nation_counts = power_nation_counts
+            context_option.working_operator_ids = sorted(assigned_ids)
+            context_option.trade_operator_ids = trade_operator_ids
+            context_option.elite_staffed_facility_count = elite_facilities
+            context_option.sui_staffed_facility_count = sui_facilities
             context_option.audit = [line for line in context_option.audit if not line.startswith("制造站：深海猎人")]
             if abyssal_count:
                 context_option.audit.append(f"制造站：深海猎人 {abyssal_count} 名")

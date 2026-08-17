@@ -75,7 +75,10 @@ def _skill_value(skill: dict, product: str, maa_room: dict) -> tuple[float, bool
 def _actual_speed_value(skill: dict, product: str, maa_room: dict) -> tuple[float, bool]:
     """Return clock speed without MAA's order-value equivalent scores."""
     if product in {"trade", "orundum"} and skill.get("icon") in TRADE_ECONOMIC_ICONS:
-        return 0.0, True
+        # Economic mechanics can still carry a real clock-speed component
+        # (U-Official is +10%); keep the game-data number while excluding
+        # MAA's resource-equivalent ranking score.
+        return float(skill.get("efficiency") or 0.0), True
     target = TARGETS.get(product)
     applicable = not target or not skill.get("targets") or target in skill.get("targets", [])
     if applicable and skill.get("category") == "OUTPUT":
@@ -92,9 +95,13 @@ def _trade_economics(team: list[dict], speed_efficiency: float, context: BaseCon
     breach_extra = mechanics.breach_extra_gold if mechanics.breach_marker else 0
     large_order_bonus = mechanics.normal_large_order_lmd
     base_orders = ((2.0, 1000.0, 144.0), (3.0, 1500.0, 210.0), (4.0, 2000.0, 276.0))
+    if mechanics.forced_two_gold:
+        base_orders = (base_orders[0],)
+        probabilities = (1.0,)
+        quality = "天真的谈判者：固定 2 赤金普通订单"
     distribution = []
     for (base_gold, base_lmd, minutes), probability in zip(base_orders, probabilities):
-        breach = breach_extra > 0 and base_gold < 4
+        breach = not mechanics.forced_two_gold and breach_extra > 0 and base_gold < 4
         gold = base_gold + breach_extra if breach else base_gold
         lmd = base_lmd + breach_extra * 500 if breach else base_lmd
         if large_order_bonus and base_gold > 3 and not breach:
@@ -273,6 +280,9 @@ def prepare_operators(roster: list[dict], catalog: dict) -> list[dict]:
         result.append({
             **raw,
             "name": definition["name"],
+            "nation_id": definition.get("nation_id"),
+            "group_id": definition.get("group_id"),
+            "team_id": definition.get("team_id"),
             "skills": skills,
             "icons": {x.get("icon", "") for x in skills},
         })

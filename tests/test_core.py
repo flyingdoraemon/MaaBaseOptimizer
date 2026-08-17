@@ -8,7 +8,7 @@ from maabase.importers import parse_roster
 from maabase.mechanics import mechanic_is_partial, resolve_trade_mechanics, warmed_order_probabilities
 from maabase.model import _orundum_economics, _trade_economics, active_skills, evaluate_team, prepare_operators
 from maabase.morale import analyze_morale
-from maabase.state_model import BaseContext, _average_empty_order_slots
+from maabase.state_model import BaseContext, _average_empty_order_slots, _control_effect
 from maabase.optimizer import GroupSpec, _metrics, _solve, optimize
 from maabase.scheduler import _morale_rates, _team_duration, build_rotation
 from maabase.simulator import simulate
@@ -153,6 +153,104 @@ class CoreTests(unittest.TestCase):
         profile = result["time_profiles"][0]
         self.assertEqual(profile["phases"][0]["value_percent"], 20)
         self.assertEqual(profile["phases"][-1]["value_percent"], 25)
+
+    def test_wintim_reset_does_not_convert_red_cloud_and_vulcan_capacity(self):
+        team = prepare_operators([
+            {"id": "char_4208_wintim", "elite": 0, "level": 1},
+            {"id": "char_190_clour", "elite": 1, "level": 1},
+            {"id": "char_163_hpsts", "elite": 2, "level": 1},
+        ], self.catalog)
+        result = evaluate_team(team, "gold", self.catalog, BaseContext(num_power=3, num_trade=2))
+        self.assertAlmostEqual(result["efficiency"], 0.0)
+        self.assertAlmostEqual(result["equivalent_efficiency"], 0.0)
+        self.assertTrue(any("被清除：红云、火神" in note for note in result["mechanic_notes"]))
+        self.assertFalse(any("红云仓容转换" in note for note in result["mechanic_notes"]))
+
+    def test_wintim_process_optimization_keeps_only_facility_count_effects(self):
+        invalid_capacity_team = prepare_operators([
+            {"id": "char_4208_wintim", "elite": 1, "level": 1},
+            {"id": "char_190_clour", "elite": 1, "level": 1},
+            {"id": "char_163_hpsts", "elite": 2, "level": 1},
+        ], self.catalog)
+        valid_facility_team = prepare_operators([
+            {"id": "char_4208_wintim", "elite": 1, "level": 1},
+            {"id": "char_385_finlpp", "elite": 1, "level": 1},
+            {"id": "char_163_hpsts", "elite": 2, "level": 1},
+        ], self.catalog)
+        context = BaseContext(num_power=3, num_trade=2)
+        invalid = evaluate_team(invalid_capacity_team, "gold", self.catalog, context)
+        valid = evaluate_team(valid_facility_team, "gold", self.catalog, context)
+        self.assertAlmostEqual(invalid["efficiency"], 30.0)
+        self.assertAlmostEqual(valid["efficiency"], 70.0)
+        self.assertTrue(any("贸易站 2 间 × 20%" in note for note in valid["mechanic_notes"]))
+
+    def test_red_cloud_capacity_converter_still_works_without_reset_operator(self):
+        team = prepare_operators([
+            {"id": "char_190_clour", "elite": 1, "level": 1},
+            {"id": "char_163_hpsts", "elite": 2, "level": 1},
+            {"id": "char_500_noirc", "elite": 0, "level": 1},
+        ], self.catalog)
+        result = evaluate_team(team, "gold", self.catalog, BaseContext())
+        # 8 + 19 + 10 capacity -> 74%; Vulcan -5% and Noir Corne +10%.
+        self.assertAlmostEqual(result["efficiency"], 79.0)
+
+    def test_u_official_changes_order_distribution_and_keeps_real_speed(self):
+        team = prepare_operators([
+            {"id": "char_4091_ulika", "elite": 0, "level": 1},
+        ], self.catalog)
+        result = evaluate_team(team, "trade", self.catalog, BaseContext())
+        self.assertAlmostEqual(result["efficiency"], 10.0)
+        self.assertEqual(result["trade"]["distribution"], [
+            {"base_gold": 2.0, "gold": 2.0, "lmd": 1000.0, "minutes": 144.0,
+             "probability": 1.0, "breach": False},
+        ])
+        self.assertAlmostEqual(result["trade"]["lmd_per_day"], 11100.0)
+        self.assertAlmostEqual(result["trade"]["gold_per_day"], 22.2)
+
+    def test_wang_uses_layout_room_counts_for_trade_or_factory_branch(self):
+        wang = prepare_operators([{"id": "char_2027_wang", "elite": 0, "level": 1}], self.catalog)
+        _, layout_243 = _control_effect(tuple(wang), BaseContext(num_trade=2, num_factory=4, num_power=3))
+        _, layout_153 = _control_effect(tuple(wang), BaseContext(num_trade=1, num_factory=5, num_power=3))
+        self.assertEqual(layout_243.control_trade_speed, 7.0)
+        self.assertEqual(layout_243.control_factory_speed, 0.0)
+        self.assertEqual(layout_153.control_trade_speed, 0.0)
+        self.assertEqual(layout_153.control_factory_speed, 2.0)
+
+    def test_shared_control_icon_uses_unlocked_buff_coefficient(self):
+        e0 = prepare_operators([{"id": "char_4182_oblvns", "elite": 0, "level": 1}], self.catalog)
+        e2 = prepare_operators([{"id": "char_4182_oblvns", "elite": 2, "level": 1}], self.catalog)
+        _, state_e0 = _control_effect(tuple(e0), BaseContext())
+        _, state_e2 = _control_effect(tuple(e2), BaseContext())
+        self.assertEqual(state_e0.control_gold_factory_speed, 0.5)
+        self.assertEqual(state_e2.control_gold_factory_speed, 1.0)
+
+    def test_bubble_hunter_term_does_not_include_ordinary_a6_members(self):
+        collaboration = prepare_operators([
+            {"id": "char_1048_orchd2", "elite": 2, "level": 1},
+            {"id": "char_1049_catap2", "elite": 2, "level": 1},
+            {"id": "char_4215_buddy", "elite": 0, "level": 1},
+        ], self.catalog)
+        ordinary_a6 = prepare_operators([
+            {"id": "char_1048_orchd2", "elite": 2, "level": 1},
+            {"id": "char_282_catap", "elite": 1, "level": 1},
+            {"id": "char_283_midn", "elite": 1, "level": 1},
+        ], self.catalog)
+        self.assertAlmostEqual(evaluate_team(collaboration, "trade", self.catalog)["efficiency"], 95.0)
+        self.assertAlmostEqual(evaluate_team(ordinary_a6, "trade", self.catalog)["efficiency"], 80.0)
+
+    def test_every_special_production_buff_is_either_modeled_or_reported_partial(self):
+        room_map = {"MANUFACTURE": "Mfg", "TRADING": "Trade", "POWER": "Power", "CONTROL": "Control"}
+        for buff in self.catalog["buffs"].values():
+            room = room_map.get(buff.get("room"))
+            if not room or not buff.get("icon"):
+                continue
+            if buff["icon"] in self.catalog["maa"][room]["skills"]:
+                continue
+            # A missing MAA mapping is safe only for a simple numeric game-data
+            # output skill; conditional skills must never silently fall back.
+            with self.subTest(buff=buff["id"]):
+                self.assertEqual(buff.get("category"), "OUTPUT")
+                self.assertFalse(mechanic_is_partial(buff))
 
     def test_social_trade_team_extends_to_collection_boundary(self):
         roster = [

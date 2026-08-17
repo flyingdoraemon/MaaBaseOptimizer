@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 CATALOG = json.loads((ROOT / "data" / "catalog.json").read_text(encoding="utf-8"))
 ROSTER_PATH = ROOT / "data" / "user_roster.json"
-APP_REVISION = "2026.08.17-objective-audit-v8"
+APP_REVISION = "2026.08.17-skill-precedence-v9"
 SCAN_SESSIONS: dict[str, dict] = {}
 SCAN_LOCK = threading.Lock()
 

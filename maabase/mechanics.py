@@ -25,6 +25,9 @@ TRADE_RULES: dict[str, tuple[str, object]] = {
     # Contract Law marks eligible orders as breach orders.  It has no numeric
     # parameter but is retained so coverage reporting knows it is understood.
     "bskill_tra_law": ("breach_marker", True),
+    # U-Official changes the order distribution itself; this is not merely an
+    # efficiency modifier and is explicitly not a breach order.
+    "bskill_tra_spd&wt1": ("forced_two_gold", True),
 }
 
 TRADE_ECONOMIC_ICONS = frozenset(TRADE_RULES)
@@ -37,6 +40,7 @@ class TradeMechanics:
     breach_extra_gold: int = 0
     normal_large_order_lmd: int = 0
     replace_other_speed: int = 0
+    forced_two_gold: bool = False
 
 
 def resolve_trade_mechanics(icons) -> TradeMechanics:
