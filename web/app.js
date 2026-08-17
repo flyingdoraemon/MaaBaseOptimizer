@@ -9,6 +9,12 @@ function setTheme(theme) {
 setTheme(localStorage.getItem("maaBaseTheme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
 $("themeToggle").addEventListener("click",()=>setTheme(document.documentElement.dataset.theme==="light" ? "dark" : "light"));
 
+function selectResultTab(name) {
+  document.querySelectorAll("[data-result-tab]").forEach(button => button.classList.toggle("active", button.dataset.resultTab === name));
+  document.querySelectorAll("[data-tab-panel]").forEach(panel => panel.classList.toggle("active", panel.dataset.tabPanel === name));
+}
+document.querySelectorAll("[data-result-tab]").forEach(button => button.addEventListener("click", () => selectResultTab(button.dataset.resultTab)));
+
 async function request(path, options = {}) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -223,13 +229,15 @@ $("optimizeButton").addEventListener("click", async () => {
     const data = await request("/api/optimize", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
     renderResults(data);
   } catch (error) { message("solveMessage", error.message, true); }
-  finally { button.disabled = false; button.textContent = "计算候选集排班"; }
+  finally { button.disabled = false; button.innerHTML = "<span>开始计算</span><b>→</b>"; }
 });
 
 function renderResults(data) {
   state.lastResult = data;
   const m = data.rotation?.average_metrics || data.metrics;
+  $("emptyState").classList.add("hidden");
   $("results").classList.remove("hidden");
+  selectResultTab("overview");
   $("solverBadge").textContent = data.solver;
   $("lmdKpi").textContent = number(m.lmd_per_day);
   $("expKpi").textContent = number(m.exp_per_day);
@@ -269,11 +277,9 @@ function renderResults(data) {
       <div class="room-head"><h3>${escapeHtml(room.room)}</h3><span class="eff">${totalEfficiency==null?`技能 +${room.efficiency}%`:`实际 +${totalEfficiency.toFixed(2)}%`}</span></div>
       <div class="names">${room.names.map(escapeHtml).join(" · ")}</div>
       ${output?`<div class="room-output"><span>本队在岗时日产等效</span><strong>${escapeHtml(output)}</strong><small>折算到上方 24h 图表：${escapeHtml(roomOutput(room,share))}</small></div>`:""}
-      ${totalEfficiency!=null?`<div class="eff-ledger"><span>技能/状态加成 +${room.efficiency}%</span><span>${room.key==="power"?"发电站在岗基础 +5%":`${room.names.length} 名在岗基础 +${room.names.length}%`}</span><span>${room.key==="power"?`充能增幅 +${totalEfficiency.toFixed(2)}%`:`生产倍率 ×${(+room.multiplier).toFixed(4)}`}</span></div>`:""}
-      <div class="skills">${room.details.map(d => `${escapeHtml(d.operator)}：${d.skills.map(s => escapeHtml(s.name)).join(" / ") || "无对应技能"}`).join("<br>")}</div>
-      ${(room.mechanic_notes || []).length ? `<div class="skills">机制：${room.mechanic_notes.map(escapeHtml).join("；")}</div>` : ""}
       ${event ? `<div class="endurance"><span>实际在岗 ${event.scheduled_work_hours}h</span><span>本组合安全上限 ${event.safe_work_hours}h</span><span>心情消耗 ${rateRange}/h</span></div>` : ""}
       ${room.group ? `<span class="confidence">${escapeHtml(room.group)} · MAA 组合候选</span>` : `<span class="confidence">${room.confidence === "direct" ? "直接数值模型" : room.confidence === "state_model" ? "跨设施状态模型" : "保守估算"}</span>`}
+      <details class="room-details"><summary>技能与计算明细</summary><div class="eff-ledger">${totalEfficiency!=null?`<span>技能/状态 +${room.efficiency}%</span><span>${room.key==="power"?"基础 +5%":`基础 +${room.names.length}%`}</span><span>${room.key==="power"?`充能 +${totalEfficiency.toFixed(2)}%`:`倍率 ×${(+room.multiplier).toFixed(4)}`}</span>`:""}</div><div class="skills">${room.details.map(d => `${escapeHtml(d.operator)}：${d.skills.map(s => escapeHtml(s.name)).join(" / ") || "无对应技能"}`).join("<br>")}</div>${(room.mechanic_notes || []).length ? `<div class="skills">机制：${room.mechanic_notes.map(escapeHtml).join("；")}</div>` : ""}</details>
     </article>`}).join("")}</div></section>`;
   }).join("");
   runQuickSimulation(data);
@@ -299,10 +305,9 @@ function renderObjectiveComparison(objective,currentMetrics) {
   const differences=comparison.room_differences||[];
   const converged=!!comparison.selected_dominates_alternate;
   const metric=(label,current,alternate,key)=>`<div><span>${label}</span><strong>${number(Math.round(+current||0))}</strong><small>备选 ${number(Math.round(+alternate||0))} · 差 ${signed(deltas[key]||0,3)}</small></div>`;
-  $("objectiveComparison").innerHTML=`<div class="comparison-head"><div><p class="eyebrow">OBJECTIVE CROSS-CHECK</p><h3>目标函数交叉审计</h3></div><span class="comparison-state ${converged?"same":"different"}">${converged?"两目标最终收敛":"目标产生取舍"}</span></div>
-    <p class="comparison-copy">当前：<b>${escapeHtml(objective.label)}</b>；同一 Box 完整重算：<b>${escapeHtml(comparison.alternate_label)}</b>。${converged?"当前完整排班在布局分数和等效理智分数上都不低于另一候选，因此两种目标会合法地返回同一方案；下方列出被淘汰候选的细微差别。":"两种完整排班分别在不同评分上占优，所以切换目标会改变最终方案。"}${comparison.cross_candidate_reranked?" 本次还纠正了顺序生成 A/B 后的候选反转。":""}</p>
-    <div class="comparison-metrics">${metric("龙门币 / 日",currentMetrics.lmd_per_day,alt.lmd_per_day,"lmd_per_day")}${metric("经验 / 日",currentMetrics.exp_per_day,alt.exp_per_day,"exp_per_day")}${metric("赤金制造 / 日",currentMetrics.gold_made_per_day,alt.gold_made_per_day,"gold_made_per_day")}${metric("赤金净流 / 日",currentMetrics.gold_net_per_day,alt.gold_net_per_day,"gold_net_per_day")}</div>
-    <div class="room-differences">${differences.map(row=>`<div><strong>${row.team} 班 · ${escapeHtml(row.room_type)}</strong><p><span>当前</span>${row.current.map(group=>escapeHtml(group.join(" / "))).join("；")}</p><p><span>备选</span>${row.alternate.map(group=>escapeHtml(group.join(" / "))).join("；")}</p></div>`).join("")||'<p class="side-note">忽略同类房间编号互换后，两套目标在当前 Box 得到相同组合；这表示本次候选收敛，不表示两个公式相同。</p>'}</div>`;
+  $("objectiveComparison").innerHTML=`<div class="comparison-head"><h3>目标函数对照</h3><span class="comparison-state ${converged?"same":"different"}">${converged?"结果收敛":"存在取舍"}</span></div>
+    <div class="comparison-metrics">${metric("龙门币",currentMetrics.lmd_per_day,alt.lmd_per_day,"lmd_per_day")}${metric("经验",currentMetrics.exp_per_day,alt.exp_per_day,"exp_per_day")}${metric("赤金制造",currentMetrics.gold_made_per_day,alt.gold_made_per_day,"gold_made_per_day")}${metric("赤金净流",currentMetrics.gold_net_per_day,alt.gold_net_per_day,"gold_net_per_day")}</div>
+    <details class="inline-audit"><summary>查看两种目标的组合差异</summary><p class="comparison-copy">当前：<b>${escapeHtml(objective.label)}</b>；备选：<b>${escapeHtml(comparison.alternate_label)}</b>。${converged?"本 Box 的最优候选重合，不表示公式相同。":"切换目标会改变最终方案。"}${comparison.cross_candidate_reranked?" 已执行完整 A/B 候选重排。":""}</p><div class="room-differences">${differences.map(row=>`<div><strong>${row.team} 班 · ${escapeHtml(row.room_type)}</strong><p><span>当前</span>${row.current.map(group=>escapeHtml(group.join(" / "))).join("；")}</p><p><span>备选</span>${row.alternate.map(group=>escapeHtml(group.join(" / "))).join("；")}</p></div>`).join("")||'<p class="side-note">实质房间组合与工时相同。</p>'}</div></details>`;
 }
 
 function signed(value, digits = 2) {
@@ -339,7 +344,7 @@ function renderGoldMonitor(m) {
     </div>
     <div class="net-flow ${net < 0 ? "draining" : "growing"}"><span>库存速度</span><strong>${signed(net)} / 日</strong><small>${forecast}</small></div>
     <div class="stock-line"><span>当前库存</span><strong>${number(m.gold_inventory || 0)} 根</strong></div>
-    <p class="side-note">站内制造净流量 ${signed(m.gold_production_net_per_day)} / 日。赤金仅作为贸易中间品，负数本身不是低效。</p>`;
+    <p class="side-note">站内净流 ${signed(m.gold_production_net_per_day)} / 日。</p>`;
 }
 
 function renderDroneMonitor(m) {
@@ -361,7 +366,7 @@ function renderDroneMonitor(m) {
   <div class="drone-routes">${allocations.map(item=>`<div><span><b>${escapeHtml(item.team?`${item.team} 班 · `:"")}${escapeHtml(item.label||item.kind)}</b><small>${escapeHtml(item.target||"")}</small></span><strong>${number(Math.round(+item.drones_per_day||0))} 架<small>${(+item.fraction*100||0).toFixed(1)}%</small></strong></div>`).join("")||'<p class="side-note">没有无人机投入。</p>'}</div>
   <div class="drone-deltas">${contributions.map(([label,value])=>`<p><span>${label}</span><strong>${signed(value,3)} / 日</strong></p>`).join("")||'<p><span>当前设置不把无人机计入产出</span></p>'}</div>
   ${effect.balance?`<p class="constraint ${effect.balance.reachable?"ok":"warn"}">自动瓶颈：${effect.balance.bottleneck==="gold"?"赤金供给":"贸易兑现"} · 用户允许 ${signed(effect.balance.target_gold_net_per_day)}/日 · 可达区间 ${signed(effect.balance.all_trade_gold_net_per_day)} ～ ${signed(effect.balance.all_gold_gold_net_per_day)}/日 · 分流后 ${signed(effect.balance.projected_gold_net_per_day)}/日 · ${effect.balance.binding?"目标正在约束分流":effect.balance.regime==="trade_saturated"?"目标未生效：已 100% 投贸易，再放宽不会增加收益":effect.balance.reachable?"混合班次中部分目标未生效":"即使全投赤金仍不可达"}</p>`:""}
-  <p class="side-note">无人机先恢复进库存，达到 ${m.drone_capacity || 235} 架后暂停恢复，只在下方标出的收取节点投入；解析曲线在节点跳变，随机模拟重放相同分流。</p>`;
+  <details class="inline-audit"><summary>分流口径</summary><p class="side-note">先恢复进库存，达到 ${m.drone_capacity || 235} 架后暂停；仅在收取节点投入。解析曲线与随机模拟使用相同分流。</p></details>`;
 }
 
 function renderCrossRoomFlows(flows) {
@@ -369,7 +374,7 @@ function renderCrossRoomFlows(flows) {
     $("crossRoomPanel").innerHTML = '<p class="side-note">当前组合没有触发已建模的跨房间生产状态。</p>';
     return;
   }
-  $("crossRoomPanel").innerHTML = flows.map(flow => `<details class="state-flow ${flow.active === false ? "inactive" : ""}" open>
+  $("crossRoomPanel").innerHTML = flows.map(flow => `<details class="state-flow ${flow.active === false ? "inactive" : ""}">
     <summary><span><i></i>${escapeHtml(flow.label)}</span><strong>${number(flow.value)} ${escapeHtml(flow.unit)}</strong></summary>
     <div class="state-source"><small>来源</small>${flow.sources.map(s => `<p><b>${escapeHtml(s.name)}</b><span>${escapeHtml(s.detail)}</span></p>`).join("")}</div>
     <div class="state-arrow">↓</div>
@@ -484,7 +489,7 @@ async function runQuickSimulation(result) {
     $("quickSimulation").innerHTML = `<div class="quick-grid">
       <div><span>模拟龙门币</span><strong>${number(Math.round(s.lmd_per_day))}</strong><small>${signed(d.lmd_per_day,3)}%</small></div>
       <div><span>模拟赤金净流</span><strong>${signed(s.gold_net_per_day)}</strong><small>根 / 日</small></div>
-    </div><p class="convergence ${Math.abs(d.lmd_per_day || 0) < 1 ? "ok" : "warn"}">${Math.abs(d.lmd_per_day || 0) < 1 ? "✓ 多次随机试验的均值已收敛" : "△ 与解析期望存在可见偏差"}</p><p class="side-note">本次第 1 条随机轨迹：龙门币 ${number(Math.round(data.sample_run?.lmd_per_day||0))}/日，赤金净流 ${signed(data.sample_run?.gold_net_per_day||0)}/日；随机种子 ${escapeHtml(data.seed)}。再次运行会生成新订单序列。均值的 90% 区间 ${number(Math.round(s.lmd_p05))}–${number(Math.round(s.lmd_p95))}。</p>`;
+    </div><p class="convergence ${Math.abs(d.lmd_per_day || 0) < 1 ? "ok" : "warn"}">${Math.abs(d.lmd_per_day || 0) < 1 ? "✓ 均值已收敛" : "△ 与解析期望有偏差"}</p><details class="inline-audit"><summary>本轮样本</summary><p class="side-note">首条轨迹：龙门币 ${number(Math.round(data.sample_run?.lmd_per_day||0))}/日，赤金净流 ${signed(data.sample_run?.gold_net_per_day||0)}/日；种子 ${escapeHtml(data.seed)}。90% 区间 ${number(Math.round(s.lmd_p05))}–${number(Math.round(s.lmd_p95))}。</p></details>`;
   } catch (error) {
     if (sequence === state.quickSimSequence) $("quickSimulation").innerHTML = `<p class="side-note error-copy">模拟失败：${escapeHtml(error.message)}</p>`;
   }
@@ -499,12 +504,12 @@ function renderMorale(m, rotation) {
   const slowest=rotationAudits.length ? Math.max(...rotationAudits.map(([,audit])=>+audit.slowest_recovery_hours||0)) : m.max_recovery_hours;
   const bedLedger=rotationAudits.length ? rotationAudits.map(([team,audit])=>`${team} ${audit.bed_hours_required}/${audit.bed_hours_available}`).join(" · ") : `${m.bed_hours_required} / ${m.bed_hours_available}`;
   const sustainable=rotation?.morale?.feasible ?? m.two_team_feasible;
-  $("moraleAudit").innerHTML = `<h3>轮班与宿舍可持续性</h3><div class="morale-grid">
-    <div><span>满级宿舍基础恢复</span><strong>${rotation?.morale?.base_recovery_per_hour || m.base_recovery_per_hour} / 小时</strong></div>
-    <div><span>两班最慢回满</span><strong>${slowest} 小时</strong></div>
-    <div><span>A/B 所需 / 可用床位小时</span><strong>${bedLedger}</strong></div>
-    <div><span>当前循环</span><strong>${sustainable ? "两队可持续" : "恢复不足"}</strong></div>
-  </div><p>${escapeHtml(rotation?.morale?.note || m.note)} 含 ${m.production_slots} 个产出岗位与 ${m.support_slots} 个辅助岗位；${m.owned_operators} 名干员相对最低 ${m.minimum_distinct_operators} 名的容量判断：${m.roster_capacity_ok ? "通过" : "不足"}。</p><p>固定宿舍位：${locked ? `${escapeHtml(locked.name)}（群体 +${locked.all}/小时）` : "未启用"}。菲亚梅塔：${fiammetta?.active ? `恢复 ${escapeHtml(fiammetta.target_operator_name)}；A→B 后回满 ${fiammettaAudit.recover_during_b_hours}h，B→A 后回满 ${fiammettaAudit.recover_during_a_hours}h` : escapeHtml(fiammetta?.note || (m.fiammetta_owned ? "已拥有但本次未激活" : "机制支持，当前未拥有"))}。可用宿舍辅助前列：${helpers}</p>`;
+  $("moraleAudit").innerHTML = `<div class="comparison-head"><h3>心情与宿舍</h3><span class="comparison-state ${sustainable?"same":"different"}">${sustainable ? "可持续" : "恢复不足"}</span></div><div class="morale-grid">
+    <div><span>基础恢复</span><strong>${rotation?.morale?.base_recovery_per_hour || m.base_recovery_per_hour} /h</strong></div>
+    <div><span>最慢回满</span><strong>${slowest}h</strong></div>
+    <div><span>床位小时</span><strong>${bedLedger}</strong></div>
+    <div><span>固定恢复位</span><strong>${locked ? escapeHtml(locked.name) : "未启用"}</strong></div>
+  </div><details class="inline-audit"><summary>查看恢复审计</summary><p>${escapeHtml(rotation?.morale?.note || m.note)} ${m.owned_operators} 名干员 / 最低 ${m.minimum_distinct_operators} 名：${m.roster_capacity_ok ? "通过" : "不足"}。</p><p>菲亚梅塔：${fiammetta?.active ? `恢复 ${escapeHtml(fiammetta.target_operator_name)}；两段回满 ${fiammettaAudit.recover_during_b_hours}h / ${fiammettaAudit.recover_during_a_hours}h` : escapeHtml(fiammetta?.note || (m.fiammetta_owned ? "本次未激活" : "当前未拥有"))}。候选恢复干员：${helpers}</p></details>`;
 }
 
 $("simulateButton").addEventListener("click", async () => {
@@ -527,7 +532,7 @@ function renderSimulation(data) {
     card("赤金制造 / 日", s.gold_made_per_day, "gold_made_per_day") +
     card("赤金消耗 / 日", s.gold_used_per_day, "gold_used_per_day") +
     (s.orundum_per_day > 0 ? card("合成玉 / 日", Math.round(s.orundum_per_day), "orundum_per_day") + card("碎片净变化 / 日", signed(s.shards_net_per_day), "shards_made_per_day") : "") +
-    `<p class="simulation-notes">本轮第 1 条轨迹：龙门币 ${number(Math.round(data.sample_run?.lmd_per_day||0))}/日，赤金净流 ${signed(data.sample_run?.gold_net_per_day||0)}/日；随机种子 ${escapeHtml(data.seed)}。快进 ${data.days} 天 × ${number(data.trials)} 次。${data.assumptions.map(escapeHtml).join(" ")}</p>`;
+    `<details class="simulation-notes"><summary>本轮随机轨迹与假设</summary><p>第 1 条轨迹：龙门币 ${number(Math.round(data.sample_run?.lmd_per_day||0))}/日，赤金净流 ${signed(data.sample_run?.gold_net_per_day||0)}/日；种子 ${escapeHtml(data.seed)}。${data.days} 天 × ${number(data.trials)} 次。${data.assumptions.map(escapeHtml).join(" ")}</p></details>`;
   $("simulationResult").classList.remove("hidden");
 }
 
@@ -539,23 +544,6 @@ function renderBars(m) {
   if(m.orundum_per_day>0) values.push(["合成玉 ×100",m.orundum_per_day*100,"blue"]);
   const max = Math.max(...values.map(x => x[1]));
   $("barChart").innerHTML = values.map(([label,value,kind]) => `<div class="bar-row"><span>${label}</span><div class="bar-track"><div class="bar ${kind}" style="width:${value/max*100}%"></div></div><strong>${number(Math.round(value))}</strong></div>`).join("") + `<p class="skills">无人机投向：${escapeHtml(m.drone_target)}；等效加速 ${m.drone_hours_per_day} 小时/日。</p>`;
-}
-
-function renderPareto(points) {
-  const svg = $("paretoChart");
-  if (!points.length) { svg.innerHTML = '<text x="20" y="40">没有可区分的权重方案</text>'; return; }
-  const pad = {l:62,r:24,t:20,b:44}, width=620, height=300;
-  const xs = points.map(p=>p.lmd_per_day), ys=points.map(p=>p.exp_per_day);
-  let xmin=Math.min(...xs), xmax=Math.max(...xs), ymin=Math.min(...ys), ymax=Math.max(...ys);
-  if (xmin===xmax){xmin*=.95;xmax*=1.05} if(ymin===ymax){ymin*=.95;ymax*=1.05}
-  const x=v=>pad.l+(v-xmin)/(xmax-xmin)*(width-pad.l-pad.r), y=v=>height-pad.b-(v-ymin)/(ymax-ymin)*(height-pad.t-pad.b);
-  const sorted=[...points].sort((a,b)=>a.lmd_per_day-b.lmd_per_day);
-  svg.innerHTML=`<line class="axis" x1="${pad.l}" y1="${height-pad.b}" x2="${width-pad.r}" y2="${height-pad.b}"/><line class="axis" x1="${pad.l}" y1="${pad.t}" x2="${pad.l}" y2="${height-pad.b}"/>
-    <text x="${width/2-30}" y="292">龙门币 / 日</text><text transform="translate(15 185) rotate(-90)">经验 / 日</text>
-    <text x="${pad.l}" y="278">${number(xmin)}</text><text x="${width-pad.r-50}" y="278">${number(xmax)}</text>
-    <text x="18" y="${height-pad.b}">${number(ymin)}</text><text x="18" y="${pad.t+5}">${number(ymax)}</text>
-    <polyline class="line" points="${sorted.map(p=>`${x(p.lmd_per_day)},${y(p.exp_per_day)}`).join(" ")}"/>
-    ${points.map(p=>`<circle class="point" cx="${x(p.lmd_per_day)}" cy="${y(p.exp_per_day)}" r="7"><title>龙门币 ${p.lmd_per_day}，经验 ${p.exp_per_day}，赤金净变化 ${p.gold_net_per_day}</title></circle>`).join("")}`;
 }
 
 loadCatalog().catch(error => { $("catalogStatus").textContent = `载入失败：${error.message}`; });
