@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from itertools import combinations
+import re
 from typing import Iterable
 
 from .mechanics import (
@@ -12,12 +13,13 @@ from .mechanics import (
     resolve_trade_mechanics,
     warmed_order_probabilities,
 )
-from .state_model import BaseContext, CONTEXT_MODELED_ICONS, room_context_adjustment
+from .state_model import (BaseContext, CONTEXT_MODELED_ICONS, room_context_adjustment,
+                          _order_limit, _static_capacity_by_operator, _target_matches)
 
 
 ROOM_MAP = {"MANUFACTURE": "Mfg", "TRADING": "Trade", "POWER": "Power", "CONTROL": "Control"}
 PRODUCT_KEYS = {"gold": "PureGold", "exp": "CombatRecord", "shard": "OriginStone",
-                "trade": "Money", "orundum": "Money", "power": "Drone"}
+                "trade": "Money", "orundum": "SyntheticJade", "power": "Drone"}
 TARGETS = {"gold": "F_GOLD", "exp": "F_EXP", "shard": "F_DIAMOND"}
 def active_skills(operator: dict, catalog: dict) -> list[dict]:
     definition = catalog["operators"].get(operator["id"])
@@ -257,15 +259,29 @@ def evaluate_team(team: Iterable[dict], product: str, catalog: dict, context: Ba
     speed_efficiency += float(contextual["delta"])
     rank_efficiency = max(rank_efficiency, speed_efficiency)
     multiplier = 1.0 + (len(team) + speed_efficiency) / 100.0
+    capacity = None
+    if product in TARGETS:
+        storage = 54 + sum(_static_capacity_by_operator(team, product, context).values())
+        for operator in team:
+            for skill in operator["skills"]:
+                if skill.get("room") == "MANUFACTURE" and _target_matches(skill, product):
+                    storage -= sum(float(x) for x in re.findall(r"仓库容量(?:上限)?-([0-9.]+)", skill.get("description", "")))
+        capacity = max(1, int(storage // {"gold": 2, "exp": 5, "shard": 3}[product]))
+    elif product in {"trade", "orundum"}:
+        capacity = _order_limit(team)
     return {
         "operators": [x["id"] for x in team],
         "names": [x["name"] for x in team],
         "operator_profiles": [
             {"id": x["id"], "name": x["name"], "elite": int(x.get("elite", x.get("phase", 0))),
-             "level": int(x.get("level", 1))}
+             "level": int(x.get("level", 1)),
+             **{field: x.get(field) for field in ("nation_id", "group_id", "team_id")}}
             for x in team
         ],
         "product": product,
+        "output_capacity": capacity,
+        "valuation": context.valuation,
+        "shard_recipe": context.shard_recipe,
         "efficiency": round(speed_efficiency, 3),
         "equivalent_efficiency": round(rank_efficiency, 3),
         "multiplier": multiplier,

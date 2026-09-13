@@ -49,6 +49,16 @@
         </details>
 
         <details class="compact-disclosure settings-disclosure">
+          <summary><span>搓玉价值（理智 / 份）</span><b>⌄</b></summary>
+          <div class="control-stack">
+            <label><span>合成玉定价</span><select id="orundumPricing"><option value="custom">自定义价值</option><option value="rock">按固源岩搓玉成本</option><option value="device">按装置搓玉成本</option></select></label>
+            <label><span>合成玉价值</span><input id="orundumValue" type="number" min="0" step="0.01" value="0.75"></label>
+            <div class="split-control"><label><span>固源岩价值</span><input id="rockValue" type="number" min="0" step="0.01" placeholder="未定价"></label><label><span>装置价值</span><input id="deviceValue" type="number" min="0" step="0.01" placeholder="未定价"></label></div>
+            <p class="inline-hint">材料留空时只报告消耗，不扣材料机会成本。按配方定价须填写相应材料价值。</p>
+          </div>
+        </details>
+
+        <details class="compact-disclosure settings-disclosure">
           <summary><span>轮班与宿舍</span><b>⌄</b></summary>
           <div class="control-stack">
             <label><span>轮班策略</span><select id="scheduleMode"><option value="staggered">各房间独立换班</option><option value="morale_aware">整套班组换班（对照）</option><option value="fixed">固定等长（对照）</option></select></label>
@@ -91,7 +101,7 @@
         </div>
 
         <div class="tab-panel" data-tab-panel="simulation">
-          <article class="panel simulator-panel" id="simulation"><div class="card-heading"><div><span class="card-kicker">MONTE CARLO</span><h2>随机快进</h2></div></div><div class="sim-controls"><label><span>天数</span><input id="simDays" type="number" min="1" max="365" value="30"></label><label><span>试验次数</span><input id="simTrials" type="number" min="100" max="5000" step="100" value="1000"></label><button id="simulateButton" class="primary">运行模拟</button></div><div id="simulateMessage" class="message hidden"></div><div id="simulationResult" class="simulation-result hidden"></div></article>
+          <article class="panel simulator-panel" id="simulation"><div class="card-heading"><div><span class="card-kicker">MONTE CARLO</span><h2>随机快进</h2></div></div><div class="sim-controls"><label><span>天数</span><input id="simDays" type="number" min="1" max="365" value="30"></label><label><span>试验次数</span><input id="simTrials" type="number" min="100" max="5000" step="100" value="1000"></label><label><span>随机种子（可留空）</span><input id="simSeed" type="text" inputmode="numeric" placeholder="每次随机"></label><label><span>库存策略</span><select id="simInventoryPolicy"><option value="working_stock">显示所需周转库存</option><option value="strict">库存不足时延后交单</option></select></label><button id="simulateButton" class="primary">运行模拟</button></div><div id="simulateMessage" class="message hidden"></div><div id="simulationResult" class="simulation-result hidden"></div></article>
           <article class="panel quick-card"><div class="side-title"><span class="side-icon sim-icon">▶</span><div><small>AUTO CHECK</small><h3>自动校准</h3></div></div><div id="quickSimulation" class="quick-simulation"><p>计算后自动运行。</p></div></article>
         </div>
       </section>

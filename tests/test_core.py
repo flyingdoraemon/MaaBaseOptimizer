@@ -8,7 +8,7 @@ from maabase.importers import parse_roster
 from maabase.mechanics import mechanic_is_partial, resolve_trade_mechanics, warmed_order_probabilities
 from maabase.model import _orundum_economics, _trade_economics, active_skills, evaluate_team, prepare_operators
 from maabase.morale import analyze_morale
-from maabase.state_model import BaseContext, _average_empty_order_slots, _control_effect
+from maabase.state_model import CONTEXT_MODELED_ICONS, BaseContext, _average_empty_order_slots, _control_effect
 from maabase.optimizer import GroupSpec, _metrics, _production_allocation_audit, _solve, optimize
 from maabase.scheduler import _morale_rates, _team_duration, build_rotation
 from maabase.simulator import simulate
@@ -250,7 +250,7 @@ class CoreTests(unittest.TestCase):
             room = room_map.get(buff.get("room"))
             if not room or not buff.get("icon"):
                 continue
-            if buff["icon"] in self.catalog["maa"][room]["skills"]:
+            if buff["icon"] in self.catalog["maa"][room]["skills"] or buff["icon"] in CONTEXT_MODELED_ICONS:
                 continue
             # A missing MAA mapping is safe only for a simple numeric game-data
             # output skill; conditional skills must never silently fall back.
@@ -325,7 +325,7 @@ class CoreTests(unittest.TestCase):
         self.assertGreater(trade["A"], trade["B"])
         self.assertEqual(gold, {"A": 12, "B": 12})
         self.assertNotEqual(trade, gold)
-        self.assertEqual(sorted(event["time"] for event in rotation["handover_events"]), [12, 18])
+        self.assertEqual(sorted(event["time"] for event in rotation["handover_events"]), [6, 18, 22])
 
     def test_multi_facility_operator_audit_reports_single_assignment(self):
         roster = [{"id": "char_502_nblade", "elite": 0, "level": 30}]
@@ -354,7 +354,7 @@ class CoreTests(unittest.TestCase):
         audit = rotation["morale"]["fiammetta"]
         self.assertTrue(audit["active"])
         self.assertTrue(audit["feasible"])
-        self.assertEqual(audit["self_recovery_per_hour"], 6)
+        self.assertEqual(audit["self_recovery_per_hour"], 2)
         self.assertEqual(rotation["morale"]["beds"], 19)
 
     def test_catnip_formula_types_and_control_speed_are_real_speed(self):

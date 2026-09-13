@@ -11,7 +11,7 @@ from typing import Any
 from .model import active_skills, generate_candidates, prepare_operators
 from .morale import analyze_morale, choose_dorm_helper
 from .scheduler import DRONE_CAPACITY, build_rotation, build_staggered_production_curve
-from .valuation import candidate_daily_value, metrics_daily_value, metrics_layout_score, public_valuation
+from .valuation import candidate_daily_value, metrics_daily_value, metrics_layout_score, public_valuation, resource_values
 from .state_model import (
     ABYSSAL_HUNTER_IDS,
     MONSTER_HUNTER_IDS,
@@ -194,20 +194,20 @@ def _metrics(
     # once per interval. Recovery pauses at the 235-drone cap.
     drones = min(drone_recovery_potential, DRONE_CAPACITY * 24.0 / collection_interval_hours)
     drone_hours = drones * constants["drone_minutes"] / 60.0
-    # One drone removes three base minutes, so a full day of a target room is
-    # 480 drones regardless of that room's speed.  Keep the per-drone ledger:
+    # One drone removes three BASE minutes. Normalize staffed output back
+    # to base work before valuing acceleration. Keep the per-drone ledger:
     # the scheduler can then spend the accumulated bank at actual collection
     # nodes instead of smearing acceleration continuously across the day.
     profiles: dict[str, dict] = {}
     if trade:
-        target = max(trade, key=lambda x: float((x.get("trade") or {}).get("lmd_per_day", 0)))
+        target = max(trade, key=lambda x: float((x.get("trade") or {}).get("lmd_per_day", 0)) / x["multiplier"])
         econ = target.get("trade") or {}
         profiles["trade"] = {
             "kind": "trade", "label": "贸易订单", "target": f"贸易站：{' / '.join(target['names'])}",
             "target_operators": list(target.get("operators") or []),
             "per_drone": {
-                "lmd_per_day": float(econ.get("lmd_per_day", constants["trade_lmd_base_per_day"] * target["multiplier"])) / 480.0,
-                "gold_used_per_day": float(econ.get("gold_per_day", constants["trade_gold_base_per_day"] * target["multiplier"])) / 480.0,
+                "lmd_per_day": float(econ.get("lmd_per_day", constants["trade_lmd_base_per_day"] * target["multiplier"])) / (480.0 * target["multiplier"]),
+                "gold_used_per_day": float(econ.get("gold_per_day", constants["trade_gold_base_per_day"] * target["multiplier"])) / (480.0 * target["multiplier"]),
             },
         }
     if gold:
@@ -215,21 +215,21 @@ def _metrics(
         profiles["gold"] = {
             "kind": "gold", "label": "赤金制造", "target": f"赤金制造：{' / '.join(target['names'])}",
             "target_operators": list(target.get("operators") or []),
-            "per_drone": {"gold_made_per_day": constants["gold_base_per_day"] * target["multiplier"] / 480.0},
+            "per_drone": {"gold_made_per_day": constants["gold_base_per_day"] / 480.0},
         }
     if exp:
         target = max(exp, key=lambda x: x["multiplier"])
         profiles["exp"] = {
             "kind": "exp", "label": "作战记录制造", "target": f"作战记录制造：{' / '.join(target['names'])}",
             "target_operators": list(target.get("operators") or []),
-            "per_drone": {"exp_per_day": constants["exp_base_per_day"] * target["multiplier"] / 480.0},
+            "per_drone": {"exp_per_day": constants["exp_base_per_day"] / 480.0},
         }
     if shard:
         target = max(shard, key=lambda x: x["multiplier"])
         profiles["shard"] = {
             "kind": "shard", "label": "源石碎片制造", "target": f"源石碎片制造：{' / '.join(target['names'])}",
             "target_operators": list(target.get("operators") or []),
-            "per_drone": {"shards_made_per_day": 24.0 * target["multiplier"] / 480.0},
+            "per_drone": {"shards_made_per_day": 24.0 / 480.0},
         }
     if orundum_trade:
         target = max(orundum_trade, key=lambda x: float((x.get("orundum") or {}).get("orundum_per_day", 0)))
@@ -238,8 +238,8 @@ def _metrics(
             "kind": "orundum", "label": "源石订单", "target": f"源石订单：{' / '.join(target['names'])}",
             "target_operators": list(target.get("operators") or []),
             "per_drone": {
-                "orundum_per_day": float(econ.get("orundum_per_day", 240.0 * target["multiplier"])) / 480.0,
-                "shards_used_per_day": float(econ.get("shards_per_day", 24.0 * target["multiplier"])) / 480.0,
+                "orundum_per_day": float(econ.get("orundum_per_day", 240.0 * target["multiplier"])) / (480.0 * target["multiplier"]),
+                "shards_used_per_day": float(econ.get("shards_per_day", 24.0 * target["multiplier"])) / (480.0 * target["multiplier"]),
             },
         }
 
@@ -321,6 +321,7 @@ def _metrics(
     }
     return {
         "lmd_per_day": round(lmd),
+        "valuation": next((c.get("valuation", {}) for rooms in selected.values() for c in rooms), {}),
         "lmd_shard_cost_per_day": round(shard_lmd_cost),
         "lmd_net_after_shards_per_day": round(lmd - shard_lmd_cost),
         "exp_per_day": round(experience),
@@ -535,7 +536,8 @@ def _control_row(team: list[dict], context: BaseContext) -> dict | None:
         "operator_profiles": [
             {"id": operator["id"], "name": operator["name"],
              "elite": int(operator.get("elite", operator.get("phase", 0))),
-             "level": int(operator.get("level", 1))}
+             "level": int(operator.get("level", 1)),
+             **{field: operator.get(field) for field in ("nation_id", "group_id", "team_id")}}
             for operator in team
         ],
         "efficiency": context.control_trade_speed + context.control_factory_speed,
@@ -592,7 +594,8 @@ def _support_rows(
             "operator_profiles": [
                 {"id": operator["id"], "name": operator["name"],
                  "elite": int(operator.get("elite", operator.get("phase", 0))),
-                 "level": int(operator.get("level", 1))}
+                 "level": int(operator.get("level", 1)),
+             **{field: operator.get(field) for field in ("nation_id", "group_id", "team_id")}}
                 for operator in team
             ],
             "efficiency": round(sum(max(0.0, skill_score(operator, skill_room)) for operator in team), 3),
@@ -704,6 +707,30 @@ def _cross_room_flows(
     return sorted(grouped.values(), key=lambda x: (-x["total_contribution_percent"], x["label"]))
 
 
+def production_counts(payload: dict, factory_count: int, trade_count: int) -> tuple[int, int, int, int]:
+    """Keep the requested product mix a hard constraint, including zero lines."""
+    def count(key: str, default: int) -> int:
+        raw = payload.get(key, default)
+        try:
+            value = float(raw)
+            result = int(value)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError(f"{key} 必须是非负整数") from None
+        if isinstance(raw, bool) or result < 0 or value != result:
+            raise ValueError(f"{key} 必须是非负整数")
+        return result
+
+    shard = count("shard_factories", 0)
+    exp = count("exp_factories", 1)
+    gold = count("gold_factories", factory_count - shard - exp)
+    orundum = count("orundum_trades", 0)
+    if gold + exp + shard != factory_count:
+        raise ValueError(f"赤金、作战记录和源石碎片制造站数量之和必须为 {factory_count}")
+    if orundum > trade_count:
+        raise ValueError(f"源石订单贸易站数量不能超过 {trade_count}")
+    return gold, exp, shard, orundum
+
+
 def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dict:
     roster = payload.get("operators") or []
     operators = prepare_operators(roster, catalog)
@@ -723,10 +750,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     if layout_key not in layouts:
         raise ValueError("基建布局必须是 2-4-3、1-5-3 或 3-3-3")
     trade_count, factory_count, power_count = layouts[layout_key]
-    shard_count = max(0, min(factory_count, int(payload.get("shard_factories", 0))))
-    exp_count = max(0, min(factory_count - shard_count, int(payload.get("exp_factories", 1))))
-    gold_count = factory_count - shard_count - exp_count
-    orundum_count = max(0, min(trade_count, int(payload.get("orundum_trades", 0))))
+    gold_count, exp_count, shard_count, orundum_count = production_counts(payload, factory_count, trade_count)
     lmd_trade_count = trade_count - orundum_count
     drone_target = payload.get("drone_target", "trade")
     gold_net_target_per_day = max(-10000.0, min(10000.0, float(payload.get("gold_net_target_per_day", -20))))
@@ -734,6 +758,8 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     if objective_mode not in {"layout_output", "sanity_value"}:
         raise ValueError("排班目标必须是按布局产出或等效理智价值")
     shard_recipe = "device" if payload.get("shard_recipe") == "device" else "rock"
+    valuation = payload.get("valuation") or {}
+    resource_values(valuation)  # Reject invalid pricing before the expensive search.
     keep = max(120, min(600, int(payload.get("candidate_limit", 320))))
     groups = [GroupSpec("trade", lmd_trade_count), GroupSpec("orundum", orundum_count),
               GroupSpec("gold", gold_count), GroupSpec("exp", exp_count), GroupSpec("shard", shard_count),
@@ -749,6 +775,10 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
         num_trade=trade_count,
         num_factory=factory_count,
         num_power=power_count,
+        valuation=valuation,
+        shard_recipe=shard_recipe,
+        sees_operator_ids=[op["id"] for op in (dorm_helper, fiammetta)
+                           if op and catalog["operators"].get(op["id"], {}).get("team_id") == "sees"],
     )
     external_gold_per_day = max(0.0, min(10000.0, float(payload.get("external_gold_per_day", 0))))
     gold_inventory = max(0.0, min(10000000.0, float(payload.get("gold_inventory", 0))))
@@ -835,6 +865,16 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 for key in ("trade", "orundum") for room in selected_option.get(key, [])
                 for operator_id in room.get("operators", [])
             })
+            factory_operator_ids = sorted({op for room in factory_rooms for op in room.get("operators", [])})
+            sees_operator_ids = sorted(set(base_context.sees_operator_ids) | {
+                op["id"] for op in assigned_operators if op.get("team_id") == "sees"
+            })
+            if any(op.get("team_id") == "sees" for op in operators):
+                support_ids = {id for row in _support_rows(operators, assigned_ids, model_shift_hours, reusable_ids)
+                               for id in row.get("operators", [])}
+                sees_operator_ids = sorted(set(sees_operator_ids) | {
+                    id for id in support_ids if catalog["operators"].get(id, {}).get("team_id") == "sees"
+                })
             all_selected_rooms = [room for rooms in selected_option.values() for room in rooms]
             elite_facilities = sum(
                 any(int((production_by_id.get(operator_id) or {}).get("elite", 0)) >= 1
@@ -853,6 +893,8 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 and power_nation_counts == context_option.power_nation_counts
                 and sorted(assigned_ids) == context_option.working_operator_ids
                 and trade_operator_ids == context_option.trade_operator_ids
+                and factory_operator_ids == context_option.factory_operator_ids
+                and sees_operator_ids == context_option.sees_operator_ids
                 and elite_facilities == context_option.elite_staffed_facility_count
                 and sui_facilities == context_option.sui_staffed_facility_count
             )
@@ -871,6 +913,8 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
             context_option.power_nation_counts = power_nation_counts
             context_option.working_operator_ids = sorted(assigned_ids)
             context_option.trade_operator_ids = trade_operator_ids
+            context_option.factory_operator_ids = factory_operator_ids
+            context_option.sees_operator_ids = sees_operator_ids
             context_option.elite_staffed_facility_count = elite_facilities
             context_option.sui_staffed_facility_count = sui_facilities
             context_option.audit = [line for line in context_option.audit if not line.startswith("制造站：深海猎人")]
@@ -942,7 +986,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
             },
         },
         "metrics": metrics,
-        "valuation": public_valuation(),
+        "valuation": {**public_valuation(), **resource_values(valuation)},
         "rooms": _room_rows(selected),
         "support_rooms": ([control_row] if control_row else []) + auxiliary_rows,
         "base_state": context.public(),
@@ -1020,7 +1064,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 "target_operator_id": target_id,
                 "target_operator_name": target_name,
                 "note": (
-                    f"菲亚梅塔固定恢复 {target_name}；该干员可出现在不重叠的 A/B 时间状态，交换后按菲亚梅塔 6 心情/小时重新充满。"
+                    f"菲亚梅塔固定恢复 {target_name}；该干员可出现在不重叠的 A/B 时间状态，交换后按菲亚梅塔 2 心情/小时重新充满。"
                     if target_id else
                     "已预留菲亚梅塔，但扩大候选搜索后没有任何 A 班目标进入紧接着的 B 班能提高方案，本循环不执行心情交换。"
                 ),
@@ -1035,7 +1079,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 fiammetta=result["fiammetta"],
                 objective_mode=objective_mode,
             )
-            if result["rotation"].get("schedule_mode") == "staggered":
+            if result["rotation"].get("schedule_mode") == "staggered" or base_context.collection_interval_hours < 8:
                 weighted_selected = _room_weighted_selection(result["rotation"])
                 weighted_metrics = _metrics(
                     weighted_selected, catalog, drone_target, external_gold_per_day,
@@ -1211,5 +1255,14 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
             },
         }
         result["objective"]["comparison"] = comparison
+    if result.get("rotation") and not payload.get("_objective_audit_internal"):
+        from .simulator import simulate
+        replay = simulate({"rotation": result["rotation"], "days": 7, "trials": 1, "seed": 0}, catalog)
+        audit = replay["morale"]
+        result["rotation"]["morale"]["continuous_audit"] = audit
+        result["rotation"]["morale"]["audit_days"] = 7
+        result["rotation"]["morale"]["feasible"] = not bool(audit["exhausted_work_hours"])
+        if audit["exhausted_work_hours"]:
+            result["warnings"].append("连续 7 日模拟发现干员在上线前心情耗尽；仍保留岗位到上线，模拟产出已扣除失效技能。理论平均产出为上界，请参考效率模拟。")
     result["allocation_audit"] = _production_allocation_audit(result, roster, catalog)
     return result

@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from maabase.mechanics import mechanic_is_partial
 from maabase.model import prepare_operators
-from maabase.state_model import mechanism_coverage
+from maabase.state_model import CONTEXT_MODELED_ICONS, mechanism_coverage
 
 
 ROOM_MAP = {"MANUFACTURE": "Mfg", "TRADING": "Trade", "POWER": "Power", "CONTROL": "Control"}
@@ -42,7 +42,7 @@ def audit(catalog: dict) -> dict:
     for buff in catalog["buffs"].values():
         room = ROOM_MAP.get(buff.get("room"))
         icon = buff.get("icon")
-        if not room or not icon or icon in catalog["maa"][room]["skills"]:
+        if not room or not icon or icon in catalog["maa"][room]["skills"] or icon in CONTEXT_MODELED_ICONS:
             continue
         item = {"buff": buff["id"], "name": buff["name"], "icon": icon, "room": room}
         if buff.get("category") == "OUTPUT" and not mechanic_is_partial(buff):

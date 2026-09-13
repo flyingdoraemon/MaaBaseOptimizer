@@ -16,6 +16,11 @@ def clean(text: str) -> str:
     return TAG_RE.sub("", text or "").replace("\\n", " ").strip()
 
 
+def enum_number(value: int | str) -> int:
+    """Both numeric resource dumps and named game-data enums are supported."""
+    return int(str(value).rsplit("_", 1)[-1])
+
+
 def build(building_path: Path, character_path: Path, maa_path: Path) -> dict:
     building = json.loads(building_path.read_text(encoding="utf-8"))
     characters = json.loads(character_path.read_text(encoding="utf-8"))
@@ -48,7 +53,7 @@ def build(building_path: Path, character_path: Path, maa_path: Path) -> dict:
                     continue
                 cond = item.get("cond", {})
                 levels.append({
-                    "phase": int(cond.get("phase", 0)),
+                    "phase": enum_number(cond.get("phase", 0)),
                     "level": int(cond.get("level", 1)),
                     "buff": buff_id,
                 })
@@ -59,7 +64,8 @@ def build(building_path: Path, character_path: Path, maa_path: Path) -> dict:
             operators[char_id] = {
                 "id": char_id,
                 "name": char["name"],
-                "rarity": int(char.get("rarity", 0)) + 1,
+                "rarity": (enum_number(char["rarity"]) if str(char.get("rarity", "")).startswith("TIER_")
+                           else int(char.get("rarity", 0)) + 1),
                 # Keep affiliation metadata in the calculation catalog.  Team,
                 # group and nation membership are data, not operator-specific
                 # formula branches, and drive many cross-room RIIC skills.

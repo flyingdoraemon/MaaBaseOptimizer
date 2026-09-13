@@ -212,7 +212,7 @@ function updateProductControls() {
   $("goldFactoryHint").textContent=`剩余 ${gold} 间制造站生产赤金`;
   const prev=+$("orundumTrades").value||0;
   $("orundumTrades").innerHTML=Array.from({length:layout.trade+1},(_,i)=>`<option value="${i}">${i} 间</option>`).join("");
-  $("orundumTrades").value=shard ? Math.max(1,Math.min(prev||1,layout.trade)) : Math.min(prev,layout.trade);
+  $("orundumTrades").value=Math.min(prev,layout.trade);
   $("shardRecipe").disabled=!shard;
 }
 $("baseLayout").addEventListener("change",updateLayoutControls);
@@ -236,6 +236,9 @@ $("optimizeButton").addEventListener("click", async () => {
     shard_factories: +$("shardFactories").value,
     orundum_trades: +$("orundumTrades").value,
     shard_recipe: $("shardRecipe").value,
+    valuation: {orundum_pricing:$("orundumPricing").value, orundum:+$("orundumValue").value,
+      ...($("rockValue").value === "" ? {} : {rock:+$("rockValue").value}),
+      ...($("deviceValue").value === "" ? {} : {device:+$("deviceValue").value})},
     drone_target: $("droneTarget").value,
     gold_net_target_per_day: +$("goldNetTarget").value || 0,
     objective_mode: $("objectiveMode").value,
@@ -503,28 +506,12 @@ function renderYieldCurve(curve) {
 $("curveMetric").addEventListener("change",()=>renderYieldCurve(state.lastResult?.rotation?.production_curve));
 
 async function simulateSchedule(result, days, trials) {
-  if(result.rotation?.schedule_mode==="staggered") {
-    const durations=result.rotation.room_work_hours||{};
-    const rooms=[];
-    Object.entries(result.rotation.teams||{}).forEach(([team,plan])=>{
-      (plan.rooms||[]).forEach(room=>{
-        const hours=+(durations[room.room]?.[team]||0);
-        if(hours>0) rooms.push({...room,work_fraction:hours/24,simulation_team:team});
-      });
-    });
-    return request("/api/simulate", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({rooms,metrics:result.rotation.average_metrics,days,trials})});
-  }
-  const plans=result.rotation ? Object.values(result.rotation.teams) : [{rooms:result.rooms,metrics:result.metrics}];
-  const samples=await Promise.all(plans.map(plan=>request("/api/simulate", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({rooms:plan.rooms, metrics:plan.metrics, days, trials})})));
-  if(samples.length===1) return samples[0];
-  const expected=result.rotation.average_metrics;
-  const durations=result.rotation.team_work_hours||{A:1,B:1};
-  const weights=[durations.A||1,durations.B||1], weightTotal=weights[0]+weights[1];
-  const keys=["lmd_per_day","lmd_p05","lmd_p95","exp_per_day","gold_made_per_day","gold_used_per_day","gold_net_per_day","orundum_per_day","shards_made_per_day","shards_used_per_day","shards_net_per_day"];
-  const simulated={}; keys.forEach(key=>simulated[key]=samples.reduce((sum,x,index)=>sum+(+x.simulated[key]||0)*weights[index],0)/weightTotal);
-  const sample_run={}; ["lmd_per_day","gold_used_per_day","gold_net_per_day"].forEach(key=>sample_run[key]=samples.reduce((sum,x,index)=>sum+(+x.sample_run[key]||0)*weights[index],0)/weightTotal);
-  const difference_percent={}; ["lmd_per_day","exp_per_day","gold_made_per_day","gold_used_per_day","orundum_per_day","shards_made_per_day","shards_used_per_day"].forEach(key=>difference_percent[key]=expected[key]?((simulated[key]-expected[key])/Math.abs(expected[key])*100):null);
-  return {days,trials,simulated,sample_run,seed:samples.map(x=>x.seed).join(" / "),expected,difference_percent,assumptions:[`A/B 两套队伍分别模拟后按在岗时长 ${weights[0]}:${weights[1]} 合并。`,...samples[0].assumptions]};
+  return request("/api/simulate", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({rooms:result.rooms, metrics:result.metrics, rotation:result.rotation,
+      days, trials, seed:$("simSeed").value || undefined,
+      inventory_policy:$("simInventoryPolicy").value})
+  });
 }
 
 async function runQuickSimulation(result) {
@@ -581,6 +568,13 @@ function renderSimulation(data) {
     card("赤金消耗 / 日", s.gold_used_per_day, "gold_used_per_day") +
     (s.orundum_per_day > 0 ? card("合成玉 / 日", Math.round(s.orundum_per_day), "orundum_per_day") + card("碎片净变化 / 日", signed(s.shards_net_per_day), "shards_made_per_day") : "") +
     `<details class="simulation-notes"><summary>本轮随机轨迹与假设</summary><p>第 1 条轨迹：龙门币 ${number(Math.round(data.sample_run?.lmd_per_day||0))}/日，赤金净流 ${signed(data.sample_run?.gold_net_per_day||0)}/日；种子 ${escapeHtml(data.seed)}。${data.days} 天 × ${number(data.trials)} 次。${data.assumptions.map(escapeHtml).join(" ")}</p></details>`;
+  const entries=(data.collection_events||[]).filter(event=>event.hour<=48);
+  $("simulationResult").insertAdjacentHTML("beforeend", `<details class="simulation-notes"><summary>前 48 小时实际收取记录</summary><table><thead><tr><th>时刻</th><th>赤金库存</th><th>碎片库存</th><th>已交付龙门币</th></tr></thead><tbody>${entries.map(event=>`<tr><td>${event.hour} h</td><td>${signed(event.gold)}</td><td>${signed(event.shards)}</td><td>${number(event.collected.lmd_per_day)}</td></tr>`).join("")}</tbody></table><p>终点未收取：赤金 ${data.pending_output?.gold_made_per_day||0}，源石碎片 ${data.pending_output?.shards_made_per_day||0}。</p><button id="downloadSimulation">下载完整模拟记录</button></details>`);
+  document.getElementById("downloadSimulation").addEventListener("click",()=>{
+    const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"}));
+    const link=document.createElement("a"); link.href=url; link.download=`simulation-${data.seed}.json`; link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
   $("simulationResult").classList.remove("hidden");
 }
 

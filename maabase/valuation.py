@@ -8,6 +8,8 @@ amount of LMD.  Values are expressed in sanity-equivalent units.
 
 from __future__ import annotations
 
+import math
+
 
 LMD_VALUE = 36.0 / 10_000.0
 EXP_VALUE = LMD_VALUE * 145.0 / 229.0
@@ -16,8 +18,34 @@ GOLD_VALUE = DRONE_VALUE / (180.0 / 4320.0)
 ORUNDUM_VALUE = 135.0 / 180.0
 
 
+def resource_values(settings: dict | None = None) -> dict:
+    """Yituliu pricing with explicit material opportunity costs (sanity/item)."""
+    settings = settings or {}
+    values = {"lmd": LMD_VALUE, "exp": EXP_VALUE, "drone": DRONE_VALUE, "gold": GOLD_VALUE,
+              "orundum": ORUNDUM_VALUE, "rock": 0.0, "device": 0.0}
+    for key in ("orundum", "rock", "device"):
+        value = float(settings.get(key, values[key]))
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"{key} 的理智价值必须为有限非负数")
+        values[key] = value
+    strategy = settings.get("orundum_pricing", "custom")
+    if strategy not in {"custom", "rock", "device"}:
+        raise ValueError("合成玉定价须为 custom、rock 或 device")
+    if strategy in {"rock", "device"}:
+        if strategy not in settings:
+            raise ValueError("按搓玉配方定价时必须提供对应材料的理智价值")
+        count, lmd = (2, 1600) if strategy == "rock" else (1, 1000)
+        values["orundum"] = (values[strategy] * count + lmd * LMD_VALUE + 40 * DRONE_VALUE) / 10
+    # One shard can be exchanged for ten orundum using twenty drones of
+    # baseline trading work. Value remaining shards and spent shards equally.
+    values["shard"] = 10 * values["orundum"] - 20 * DRONE_VALUE
+    values["unpriced_materials"] = [key for key in ("rock", "device") if key not in settings]
+    return values
+
+
 def candidate_daily_value(candidate: dict, product: str) -> float:
     """Return one room candidate's comparable daily resource value."""
+    values = resource_values(candidate.get("valuation"))
     if product == "trade":
         trade = candidate.get("trade") or {}
         return (
@@ -32,22 +60,27 @@ def candidate_daily_value(candidate: dict, product: str) -> float:
         extra_drones = 240.0 * (5.0 + float(candidate.get("efficiency", 0) or 0)) / 100.0
         return extra_drones * DRONE_VALUE
     if product == "orundum":
-        return float((candidate.get("orundum") or {}).get("orundum_per_day", 0) or 0) * ORUNDUM_VALUE
+        economy = candidate.get("orundum") or {}
+        return (float(economy.get("orundum_per_day", 0) or 0) * values["orundum"]
+                - float(economy.get("shards_per_day", 0) or 0) * values["shard"])
     if product == "shard":
-        # Rock/device opportunity cost is user-specific.  Use production speed
-        # to rank shard rooms, while the result ledger exposes the real input
-        # quantities instead of pretending this is a universal sanity value.
-        return 20.0 * float(candidate.get("multiplier", 0) or 0) * GOLD_VALUE
+        recipe = candidate.get("shard_recipe", "rock")
+        count, lmd = (1, 1000) if recipe == "device" else (2, 1600)
+        return 24 * float(candidate.get("multiplier", 0) or 0) * (
+            values["shard"] - lmd * LMD_VALUE - count * values[recipe])
     return 0.0
 
 
 def metrics_daily_value(metrics: dict) -> float:
     """Value a complete resource ledger without double-counting drones."""
+    values = resource_values(metrics.get("valuation"))
     return (
-        float(metrics.get("lmd_per_day", 0) or 0) * LMD_VALUE
+        (float(metrics.get("lmd_per_day", 0) or 0) - float(metrics.get("lmd_shard_cost_per_day", 0) or 0)) * LMD_VALUE
         + float(metrics.get("exp_per_day", 0) or 0) * EXP_VALUE
         + float(metrics.get("gold_net_per_day", 0) or 0) * GOLD_VALUE
-        + float(metrics.get("orundum_per_day", 0) or 0) * ORUNDUM_VALUE
+        + float(metrics.get("orundum_per_day", 0) or 0) * values["orundum"]
+        + float(metrics.get("shards_net_per_day", 0) or 0) * values["shard"]
+        - float(metrics.get("shard_material_used_per_day", 0) or 0) * values[metrics.get("shard_recipe", "rock")]
     )
 
 

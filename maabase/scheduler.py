@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import re
 
 from .valuation import candidate_daily_value, metrics_daily_value, metrics_layout_score
 
@@ -12,35 +11,30 @@ BASE_RECOVERY_PER_HOUR = 4.0
 DRONE_CAPACITY = 235.0
 
 
-def _morale_rates(room: dict) -> dict[str, float]:
-    operators = room.get("operators", [])
-    details = room.get("details", [])
-    count = len(operators)
-    if room.get("key") in {"trade", "orundum", "gold", "exp", "shard"}:
-        base = 1.0 - 0.05 * max(0, count - 1)
-    elif room.get("key") == "control":
-        base = 1.0 - 0.05 * count
-    else:
-        base = 1.0
-    group_delta = 0.0
-    for detail in details:
-        for skill in detail.get("skills", []):
-            text = str(skill.get("description") or "")
-            if "内干员心情每小时消耗" not in text:
-                continue
-            for sign, value in re.findall(r"心情每小时消耗([+-])([0-9.]+)", text):
-                group_delta += float(value) * (1 if sign == "+" else -1)
-    rates = {}
-    for operator_id, detail in zip(operators, details):
-        delta = group_delta
-        for skill in detail.get("skills", []):
-            text = str(skill.get("description") or "")
-            if "内干员心情每小时消耗" in text:
-                continue
-            for sign, value in re.findall(r"心情每小时消耗([+-])([0-9.]+)", text):
-                delta += float(value) * (1 if sign == "+" else -1)
-        rates[operator_id] = round(max(0.0, base + delta), 3)
-    return rates
+from .work_morale import morale_rates as _morale_rates
+from .login_calendar import login_hours, apply_night_calendar
+
+
+def _annotate_control(team: dict) -> None:
+    rooms = _all_rooms(team)
+    control = next((room for room in rooms if room.get("key") == "control"), {})
+    for room in rooms:
+        room["control_room"] = {key: control[key] for key in ("operators", "names", "details", "operator_profiles") if key in control}
+        room["base_state"] = team.get("base_state") or {}
+
+
+def _pairs(options: dict, collection: float, maximum: float) -> list[tuple[float, float]]:
+    if collection < 8:
+        # Start A at 06:00 and repeat at 06:00 the next day. The relief
+        # duration need not be a grid multiple: overnight logins are skipped.
+        daily = [(hour - 6, 30 - hour) for hour in login_hours(collection, 24)
+                 if hour > 6]
+        limited = [(a, b) for a, b in daily if max(a, b) <= maximum]
+        daily = limited or sorted(daily, key=lambda pair: max(pair))
+        safe = [(a, b) for a, b in daily if a <= max(options["A"]) and b <= max(options["B"])]
+        return safe or daily
+    pairs = [(a, b) for a in options["A"] for b in options["B"]]
+    return [(a, b) for a, b in pairs if abs(a + b - 24) < 1e-9] or pairs
 
 
 def _all_rooms(team: dict) -> list[dict]:
@@ -53,7 +47,7 @@ def _team_duration(team: dict, collection_hours: float, morale_floor: float, max
     fatigue_limit = min(((24.0 - morale_floor) / rate for rate in rates), default=max_work_hours)
     safe = min(max_work_hours, fatigue_limit)
     aligned = math.floor((safe + 1e-9) / collection_hours) * collection_hours
-    return round(aligned if aligned > 0 else max(1.0, safe), 3)
+    return round(aligned if aligned > 0 else collection_hours, 3)
 
 
 def _duration_options(team: dict, collection_hours: float, morale_floor: float, max_work_hours: float) -> list[float]:
@@ -74,14 +68,14 @@ def _recovery_audit(
 
     An all-dorm recovery skill affects the other four beds in that dorm.  The
     four workers with the largest recovery demand are assigned there; all other
-    workers use ordinary max-level beds and may leave as soon as they are full.
+    workers use ordinary max-level beds. Beds can only be reassigned at login.
     """
     instant_target = str((fiammetta or {}).get("target_operator_id") or "") if (fiammetta or {}).get("active") else ""
     rates = [
         rate for room in _all_rooms(team) for operator_id, rate in _morale_rates(room).items()
         if operator_id != instant_target
     ]
-    spent = sorted((rate * work_hours for rate in rates), reverse=True)
+    spent = sorted((min(24.0, max(0.0, rate * work_hours)) for rate in rates), reverse=True)
     all_bonus = max(0.0, float((dorm_helper or {}).get("all", 0) or 0))
     boosted_slots = min(4, len(spent)) if dorm_helper and all_bonus > 0 else 0
     recovery_times = [
@@ -103,6 +97,8 @@ def _recovery_audit(
         "boosted_beds": boosted_slots,
         "boosted_recovery_per_hour": round(BASE_RECOVERY_PER_HOUR + all_bonus, 3),
         "feasible": slowest <= rest_hours + 1e-9 and required <= available + 1e-9,
+        "capacity_bound_only": True,
+        "bed_reassignment": "login_only",
     }
 
 
@@ -119,12 +115,12 @@ def _fiammetta_audit(
     if not (fiammetta or {}).get("active"):
         return {"active": False, "feasible": True}
     target_id = str(fiammetta["target_operator_id"])
-    spent_a = _operator_morale_rate(team_a, target_id) * durations["A"]
-    spent_b = _operator_morale_rate(team_b, target_id) * durations["B"]
-    # Self-recovery is max-dorm 4/h plus Fiammetta's isolated +2/h.  After a
+    spent_a = min(24.0, max(0.0, _operator_morale_rate(team_a, target_id) * durations["A"]))
+    spent_b = min(24.0, max(0.0, _operator_morale_rate(team_b, target_id) * durations["B"]))
+    # Fiammetta recovers exactly 2/h and cannot receive the dorm base. After a
     # swap she inherits the target's ending morale, so her missing morale is
     # exactly what the target spent in the preceding shift.
-    recovery_rate = 6.0
+    recovery_rate = 2.0
     recover_after_a = spent_a / recovery_rate
     recover_after_b = spent_b / recovery_rate
     feasible = recover_after_a <= durations["B"] + 1e-9 and recover_after_b <= durations["A"] + 1e-9
@@ -167,7 +163,7 @@ def _choose_durations(
         "B": _production_score(team_b, objective_mode),
     }
     best: tuple[float, float, float, float] | None = None
-    pairs = [(a_hours, b_hours) for a_hours in options["A"] for b_hours in options["B"]]
+    pairs = _pairs(options, collection, maximum)
     daily_pairs = [(a_hours, b_hours) for a_hours, b_hours in pairs if abs(a_hours + b_hours - 24.0) < 1e-9]
     for a_hours, b_hours in (daily_pairs or pairs):
         trial_durations = {"A": a_hours, "B": b_hours}
@@ -186,10 +182,9 @@ def _choose_durations(
             best = candidate
     if best is None:
         fallback = {
-            "A": _team_duration(team_a, collection, floor, maximum),
-            "B": _team_duration(team_b, collection, floor, maximum),
+            "A": pairs[0][0], "B": pairs[0][1],
         }
-        return fallback, "没有找到可持续的不等长组合，退回各队心情上限"
+        return fallback, "没有找到可持续的不等长组合，采用合法上线节点并由连续心情模拟标记不足"
     durations = {"A": best[2], "B": best[3]}
     return durations, (
         f"在收取节点上枚举 {len(options['A']) * len(options['B'])} 组班长，"
@@ -240,7 +235,7 @@ def _choose_room_durations(
     scores = {"A": _room_score(room_a, objective_mode), "B": _room_score(room_b, objective_mode)}
     best: tuple[float, float, float, float, float] | None = None
     best_audits: tuple[dict, dict] | None = None
-    pairs = [(a_hours, b_hours) for a_hours in options["A"] for b_hours in options["B"]]
+    pairs = _pairs(options, collection, maximum)
     # A 24-hour room cycle makes the displayed 24h trace an exact repeating
     # steady-state day.  Only fall back to a non-daily cycle if the login grid
     # or recovery constraints make every daily split infeasible.
@@ -269,8 +264,7 @@ def _choose_room_durations(
             durations = {"A": a_hours, "B": b_hours}
     if best is None:
         durations = {
-            "A": _team_duration(teams["A"], collection, floor, maximum),
-            "B": _team_duration(teams["B"], collection, floor, maximum),
+            "A": pairs[0][0], "B": pairs[0][1],
         }
         best_audits = (
             _recovery_audit(teams["A"], durations["A"], durations["B"], None, fiammetta),
@@ -388,7 +382,7 @@ def _instant_multiplier(room: dict, elapsed_hours: float) -> float:
         if phase is None and phases and elapsed_hours >= float(phases[-1]["end_hour"]):
             phase = phases[-1]
         efficiency += float((phase or {}).get("value_percent", 0) or 0)
-    return 1.0 + (len(room.get("operators") or []) + efficiency) / 100.0
+    return 1.0 + (len(room.get("active_operators", room.get("operators")) or []) + efficiency) / 100.0
 
 
 def _room_output_ratio(rooms: list[dict], elapsed_hours: float, value) -> float:
@@ -522,6 +516,7 @@ def _production_curve(
     drone_events = []
     step = 15
     collection_minutes = max(step, round(collection_hours * 60 / step) * step)
+    collection_nodes = {round(hour * 60, 6) for hour in login_hours(collection_hours, minutes / 60, quiet=False)}
     label, elapsed_hours = active_team(0)
     rates = _instant_rates(teams[label], elapsed_hours)
     points.append({
@@ -544,7 +539,7 @@ def _production_curve(
         )
 
         event = None
-        if minute % collection_minutes == 0:
+        if minute in collection_nodes:
             effect = (teams[outgoing].get("metrics") or {}).get("drone_effect") or {}
             allocations = effect.get("allocations") or []
             event_deltas = {key: 0.0 for key in metric_keys}
@@ -802,7 +797,7 @@ def build_staggered_production_curve(
                 continue
             candidate = candidates.get((event["team"], room_name))
             if candidate:
-                result.append((event["team"], candidate, max(0.0, hour - float(event["start"]))))
+                result.append((event["team"], candidate, max(0.0, hour - float(event["start"]) + float(event.get("elapsed_offset_hours", 0)))))
         return result
 
     def room_rates(room: dict, elapsed: float) -> dict[str, float]:
@@ -852,8 +847,8 @@ def build_staggered_production_curve(
                     "target": f"{room.get('room')}：{' / '.join(room.get('names') or [])}",
                     "target_operators": room.get("operators") or [],
                     "per_drone": {
-                        "lmd_per_day": float(economy.get("lmd_per_day", 0) or 0) * ratio / 480.0,
-                        "gold_used_per_day": float(economy.get("gold_per_day", 0) or 0) * ratio / 480.0,
+                        "lmd_per_day": float(economy.get("lmd_per_day", 0) or 0) / (480.0 * float(room["multiplier"])),
+                        "gold_used_per_day": float(economy.get("gold_per_day", 0) or 0) / (480.0 * float(room["multiplier"])),
                     },
                 }
                 if candidate["per_drone"]["lmd_per_day"] > float((profiles.get("trade") or {}).get("per_drone", {}).get("lmd_per_day", -1)):
@@ -865,7 +860,7 @@ def build_staggered_production_curve(
                     "kind": key, "label": {"gold": "赤金制造", "exp": "作战记录制造", "shard": "源石碎片制造"}[key],
                     "team": label, "target": f"{room.get('room')}：{' / '.join(room.get('names') or [])}",
                     "target_operators": room.get("operators") or [],
-                    "per_drone": {output_key: float(base) * _instant_multiplier(room, elapsed) / 480.0},
+                    "per_drone": {output_key: float(base) / 480.0},
                 }
                 if candidate["per_drone"][output_key] > float((profiles.get(key) or {}).get("per_drone", {}).get(output_key, -1)):
                     profiles[key] = candidate
@@ -876,8 +871,8 @@ def build_staggered_production_curve(
                     "target": f"{room.get('room')}：{' / '.join(room.get('names') or [])}",
                     "target_operators": room.get("operators") or [],
                     "per_drone": {
-                        "orundum_per_day": float(economy.get("orundum_per_day", 0) or 0) * ratio / 480.0,
-                        "shards_used_per_day": float(economy.get("shards_per_day", 0) or 0) * ratio / 480.0,
+                        "orundum_per_day": float(economy.get("orundum_per_day", 0) or 0) / (480.0 * float(room["multiplier"])),
+                        "shards_used_per_day": float(economy.get("shards_per_day", 0) or 0) / (480.0 * float(room["multiplier"])),
                     },
                 }
         return profiles
@@ -890,6 +885,7 @@ def build_staggered_production_curve(
     drone_events = []
     step = 15
     collection_minutes = max(step, round(float(rotation["collection_interval_hours"]) * 60 / step) * step)
+    collection_nodes = {round(hour * 60, 6) for hour in login_hours(float(rotation["collection_interval_hours"]), minutes / 60)}
     rates, active_rooms = snapshot(0.0)
     points.append({"minute": 0, "team": "A", "rates_per_hour": rates,
                    "cumulative": dict(cumulative), "drone_event": None})
@@ -905,7 +901,7 @@ def build_staggered_production_curve(
         overflow += max(0.0, drone_bank + generated - DRONE_CAPACITY)
         drone_bank = new_bank
         event = None
-        if minute % collection_minutes == 0:
+        if minute in collection_nodes:
             profiles = drone_profiles(active_rooms)
             allocations = []
             if drone_target in {"auto_balance", "auto_lmd"} and "trade" in profiles:
@@ -985,12 +981,14 @@ def build_rotation(
     collection = max(1.0, min(24.0, float(collection_interval_hours or requested)))
     maximum = max(1.0, min(36.0, float(max_work_hours or requested)))
     floor = max(0.0, min(23.0, float(morale_floor)))
+    _annotate_control(team_a)
+    _annotate_control(team_b)
     teams = {"A": team_a, "B": team_b}
     if schedule_mode == "staggered":
-        return _build_staggered_rotation(
+        return apply_night_calendar(_build_staggered_rotation(
             team_a, team_b, requested, collection, maximum, floor,
             dorm_helper, fiammetta, objective_mode, horizon_hours,
-        )
+        ))
     if schedule_mode == "morale_aware":
         durations, duration_reason = _choose_durations(
             team_a, team_b, collection, floor, maximum, dorm_helper, fiammetta, objective_mode
@@ -1058,7 +1056,7 @@ def build_rotation(
     room_order = {"control": 0, "trade": 1, "orundum": 2, "gold": 3, "exp": 4,
                   "shard": 5, "power": 6, "reception": 7, "office": 8}
     rooms = sorted(room_rows.values(), key=lambda row: (room_order.get(row.get("key"), 99), row["room"]))
-    return {
+    return apply_night_calendar({
         "cycle_hours": horizon, "natural_cycle_hours": natural_cycle, "shift_hours": requested, "schedule_mode": schedule_mode,
         "objective_mode": objective_mode,
         "collection_interval_hours": collection, "morale_floor": floor, "team_work_hours": durations,
@@ -1092,4 +1090,4 @@ def build_rotation(
             "mode": "working_stock", "collection_interval_hours": collection,
             "note": "制造站与贸易站在同一收取节点结算；产出期望默认已有足够周转库存，不从零库存强制串行启动。",
         },
-    }
+    })

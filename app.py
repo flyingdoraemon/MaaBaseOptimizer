@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 CATALOG = json.loads((ROOT / "data" / "catalog.json").read_text(encoding="utf-8"))
 ROSTER_PATH = ROOT / "data" / "user_roster.json"
-APP_REVISION = "2026.08.17-schedule-readability-v12"
+APP_REVISION = "2026.09.14-login-morale-v13"
 SCAN_SESSIONS: dict[str, dict] = {}
 SCAN_LOCK = threading.Lock()
 
@@ -181,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/simulate":
                 if not isinstance(payload, dict):
                     raise ValueError("请求格式错误")
-                self._json(200, simulate(payload))
+                self._json(200, simulate(payload, CATALOG))
             else:
                 self._json(404, {"error": "unknown endpoint"})
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:

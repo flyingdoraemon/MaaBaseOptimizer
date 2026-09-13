@@ -63,27 +63,10 @@ def choose_dorm_helper(operators: list[dict], preferred_id: str | None = None) -
 
 
 def _work_rates(rooms: list[dict]) -> dict[str, float]:
-    rates: dict[str, float] = {}
-    for room in rooms:
-        team_all_delta = 0.0
-        for detail in room.get("details", []):
-            for skill in detail.get("skills", []):
-                text = str(skill.get("description") or "")
-                if "全体心情每小时消耗" in text:
-                    match = re.search(r"全体心情每小时消耗([+-])([0-9.]+)", text)
-                    if match:
-                        team_all_delta += float(match.group(2)) * (1 if match.group(1) == "+" else -1)
-        for detail in room.get("details", []):
-            rate = 1.0 - CONTROL_BASE_REDUCTION + team_all_delta
-            for skill in detail.get("skills", []):
-                text = str(skill.get("description") or "")
-                if "全体心情每小时消耗" in text:
-                    continue
-                match = re.search(r"心情每小时消耗([+-])([0-9.]+)", text)
-                if match:
-                    rate += float(match.group(2)) * (1 if match.group(1) == "+" else -1)
-            rates[str(detail.get("operator"))] = max(0.0, rate)
-    return rates
+    from .work_morale import morale_rates
+    control = next((room for room in rooms if room.get("key") == "control"), {})
+    return {f"{index}:{operator}": rate for index, room in enumerate(rooms)
+            for operator, rate in morale_rates(room, control).items()}
 
 
 def analyze_morale(rooms: list[dict], roster: list[dict], catalog: dict, shift_hours: float = 8.0) -> dict:
@@ -100,14 +83,13 @@ def analyze_morale(rooms: list[dict], roster: list[dict], catalog: dict, shift_h
     helpers.sort(key=lambda x: (x["all"], x["single"], x["self"]), reverse=True)
     rates = _work_rates(rooms)
     max_rate = max(rates.values(), default=0.75)
-    max_spent = max_rate * shift_hours
+    max_spent = min(24.0, max(0.0, max_rate * shift_hours))
     recovery_hours = max_spent / BASE_RECOVERY_PER_HOUR
     production_slots = sum(len(room.get("operators", [])) for room in rooms)
     active_slots = production_slots + SUPPORT_ACTIVE_SLOTS
     dorm_capacity = DORM_COUNT * DORM_SLOTS
-    # Beds are a flow capacity, not a one-worker-per-shift reservation.  A
-    # worker may leave as soon as full, so compare required and available
-    # bed-hours over the whole rest shift.
+    # Bed-hours are only a capacity bound; the rotation replay checks actual
+    # bed occupancy and only reassigns beds when the player logs in.
     work_rates = list(rates.values())
     support_rate = max(0.0, 1.0 - CONTROL_BASE_REDUCTION)
     recovery_load = sum(rate * shift_hours / BASE_RECOVERY_PER_HOUR for rate in work_rates)
@@ -132,6 +114,8 @@ def analyze_morale(rooms: list[dict], roster: list[dict], catalog: dict, shift_h
         "bed_hours_required": round(recovery_load, 3),
         "bed_hours_available": round(bed_hours_available, 3),
         "two_team_feasible": two_team_feasible,
+        "capacity_bound_only": True,
+        "requires_login_timeline_audit": True,
         "recommended_rotation_teams": recommended_teams,
         "minimum_distinct_operators": required_roster,
         "owned_operators": len(roster),
@@ -139,7 +123,7 @@ def analyze_morale(rooms: list[dict], roster: list[dict], catalog: dict, shift_h
         "fiammetta_owned": any(operator.get("name") == "菲亚梅塔" for operator in roster),
         "dorm_helpers": helpers[:10],
         "note": (
-            "满级满氛围宿舍的基础恢复与床位小时数都足以支撑休息一班；宿舍恢复干员不作为常规硬需求，"
+            "床位小时容量满足两队轮换的必要条件；实际床位只能在上线时更换，需以连续模拟审计为准。"
             "但会保留给额外心情消耗、错峰不足或特殊体系。"
             if two_team_feasible else
             "仅靠基础恢复无法在一班内回满，需要分配宿舍恢复技能或延长休息。"

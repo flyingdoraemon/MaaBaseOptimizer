@@ -31,6 +31,7 @@ RIIC_TERMS = {key: frozenset(value) for key, value in _TERM_DATA["terms"].items(
 
 
 CONTEXT_MODELED_ICONS = frozenset({
+    "bskill_ctrl_p_spd_p3r", "bskill_man_p3r", "bskill_pow_spd_p3r",
     "bskill_tra_texas1", "bskill_tra_Lappland1", "bskill_tra_Lappland2",
     "bskill_tra_spd&formula1", "bskill_tra_flow_gs", "bskill_tra_spd&limit_felyne",
     "bskill_tra_spd_variable21", "bskill_tra_spd_variable22",
@@ -111,6 +112,10 @@ class BaseContext:
     power_nation_counts: dict[str, int] = field(default_factory=dict)
     working_operator_ids: list[str] = field(default_factory=list)
     trade_operator_ids: list[str] = field(default_factory=list)
+    factory_operator_ids: list[str] = field(default_factory=list)
+    sees_operator_ids: list[str] = field(default_factory=list)
+    valuation: dict = field(default_factory=dict)
+    shard_recipe: str = "rock"
     elite_staffed_facility_count: int = 0
     sui_staffed_facility_count: int = 0
     drone_capacity: int = 235
@@ -121,6 +126,7 @@ class BaseContext:
 
 
 CONTROL_PRODUCTION_ICONS = {
+    "bskill_ctrl_p_spd_p3r",
     "bskill_ctrl_t_spd", "bskill_ctrl_p_spd", "bskill_ctrl_cost_felyne", "bskill_ctrl_felyne",
     "bskill_ctrl_aegir2", "bskill_ctrl_aegir", "bskill_ctrl_cost_bd1", "bskill_ctrl_cost_bd1&bd2",
     "bskill_ctrl_cost_bd2", "bskill_ctrl_cost_bd3", "bskill_ctrl_dorm_uika1", "bskill_ctrl_hire_tmoris",
@@ -166,7 +172,7 @@ def _control_effect(team: tuple[dict, ...], context: BaseContext) -> tuple[float
     if "bskill_ctrl_t_spd" in icons:
         result.control_trade_speed = max(result.control_trade_speed, 7.0)
         result.audit.append("控制中枢：全贸易站订单效率 +7%")
-    if "bskill_ctrl_p_spd" in icons:
+    if icons & {"bskill_ctrl_p_spd", "bskill_ctrl_p_spd_p3r"}:
         result.control_factory_speed = max(result.control_factory_speed, 2.0)
         result.audit.append("控制中枢：全制造站生产力 +2%")
     if "bskill_ctrl_tra&prod" in icons:
@@ -318,7 +324,7 @@ def select_control_options(
 
 
 def _target_matches(skill: dict, product: str) -> bool:
-    target = {"gold": "F_GOLD", "exp": "F_EXP"}.get(product)
+    target = {"gold": "F_GOLD", "exp": "F_EXP", "shard": "F_DIAMOND"}.get(product)
     return not target or not skill.get("targets") or target in skill.get("targets", [])
 
 
@@ -809,6 +815,15 @@ def room_context_adjustment(team: list[dict], product: str, context: BaseContext
         delta += facility_speed
         modeled.update(facility_icons)
         notes.extend(facility_notes)
+        if "bskill_man_p3r" in icons:
+            # Team membership comes from the game catalog, not icon aliases.
+            local = {op["id"] for op in team if op.get("team_id") == "sees"}
+            count = min(4, len(set(context.sees_operator_ids) | local))
+            value = 5.0 * count
+            delta += value
+            modeled.add("bskill_man_p3r")
+            notes.append(f"社群的意义：基建内 S.E.E.S. {count} 名 × 5% = +{value:g}%")
+            use_state("sees_operator_ids", "S.E.E.S. 干员", count, value, "包含自身，最多 4 名；不包含副手")
         ramp_rules = {
             "bskill_man_spd_add1": (20.0, 1.0, 25.0, "急性子"),
             "bskill_man_spd_add2": (15.0, 2.0, 25.0, "慢性子"),
@@ -1034,6 +1049,13 @@ def room_context_adjustment(team: list[dict], product: str, context: BaseContext
             use_state("abyssal_factory_count", "深海猎人协同", total_abyssal, value, f"{total_abyssal:g} 名 × {context.abyssal_factory_percent_per_hunter:g}%")
 
     elif product == "power":
+        if "bskill_pow_spd_p3r" in icons:
+            # This buff's raw efficiency is zero despite its unconditional 15%.
+            value = 15.0 + (5.0 if "char_4217_makoto" in context.factory_operator_ids else 0.0)
+            delta += value
+            modeled.add("bskill_pow_spd_p3r")
+            notes.append(f"机械工学：基础 15%，结城理制造站联动 → +{value:g}%")
+            use_state("factory_operator_ids", "制造站结城理", int(value > 15), value, "15% + 条件 5%")
         if "bskill_pow_drone" in icons:
             value = min(25.0, float(context.drone_capacity // 10))
             delta += value
