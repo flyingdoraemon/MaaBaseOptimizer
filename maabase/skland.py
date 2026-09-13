@@ -7,6 +7,8 @@ written by this module.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+import re
 import hashlib
 import hmac
 import http.client
@@ -16,7 +18,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from typing import Any
 
 
@@ -29,6 +30,25 @@ TIMEOUT = 25
 
 class SklandError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class Credential:
+    credential: str = field(repr=False)
+    token: str = field(default="", repr=False)
+    server_time: float = 0.0
+
+
+def _upstream_error(stage: str, value: dict) -> SklandError:
+    # Only diagnostic fields, never the response data containing credentials.
+    message = re.sub(r"[A-Za-z0-9_./+=-]{24,}", "[redacted]", str(value.get("message") or value.get("msg") or "响应数据不完整"))
+    code = value.get("status", value.get("code"))
+    return SklandError(f"{stage}（状态 {code}）：{message[:160]}")
+
+
+def _server_time(value: dict) -> float:
+    timestamp = float(value.get("timestamp") or 0)
+    return timestamp / 1000 if timestamp > 10**11 else timestamp
 
 
 def _request(url: str, *, method: str = "GET", headers: dict[str, str] | None = None, body: dict | None = None) -> dict:
@@ -84,10 +104,14 @@ def get_scan_code(scan_id: str) -> str | None:
     value = _request(f"{HYPERGRYPH_BASE}/general/v1/scan_status?{query}")
     data = value.get("data") if isinstance(value.get("data"), dict) else {}
     code = data.get("scanCode")
-    return code if value.get("status") == 0 and isinstance(code, str) and code else None
+    if value.get("status") == 0 and isinstance(code, str) and code:
+        return code
+    if value.get("status") == 100 or any(word in str(value.get("msg") or "") for word in ("未扫码", "待确认", "等待确认", "已扫码")):
+        return None
+    raise _upstream_error("查询扫码状态失败，请重新生成二维码", value)
 
 
-def credential_from_scan_code(scan_code: str) -> str:
+def credential_from_scan_code(scan_code: str) -> Credential:
     login = _request(
         f"{HYPERGRYPH_BASE}/user/auth/v1/token_by_scan_code",
         method="POST",
@@ -97,7 +121,7 @@ def credential_from_scan_code(scan_code: str) -> str:
     login_data = login.get("data") if isinstance(login.get("data"), dict) else {}
     token = login_data.get("token")
     if login.get("status") != 0 or login.get("msg") != "OK" or not isinstance(token, str):
-        raise SklandError("扫码已确认，但获取鹰角登录凭据失败，请重新扫码")
+        raise _upstream_error("扫码已确认，但获取鹰角登录凭据失败，请重新扫码", login)
 
     oauth = _request(
         f"{HYPERGRYPH_BASE}/user/oauth2/v2/grant",
@@ -107,30 +131,22 @@ def credential_from_scan_code(scan_code: str) -> str:
     )
     oauth_data = oauth.get("data") if isinstance(oauth.get("data"), dict) else {}
     code = oauth_data.get("code")
-    if oauth.get("msg") != "OK" or not isinstance(code, str):
-        raise SklandError("鹰角授权换取森空岛 code 失败，请重新扫码")
+    if oauth.get("status", 0) != 0 or oauth.get("msg") != "OK" or not isinstance(code, str):
+        raise _upstream_error("鹰角授权换取森空岛 code 失败，请重新扫码", oauth)
 
-    timestamp = str(int(time.time()))
+    # Match the native-client API and the platform=1 headers below. The web
+    # endpoint requires a web device identity; a random UUID is not valid.
     cred = _request(
-        f"{SKLAND_BASE}/web/v1/user/auth/generate_cred_by_code",
+        f"{SKLAND_BASE}/api/v1/user/auth/generate_cred_by_code",
         method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/129 Safari/537.36",
-            "Referer": "https://www.skland.com/",
-            "Origin": "https://www.skland.com",
-            "dId": str(uuid.uuid4()),
-            "platform": "3",
-            "timestamp": timestamp,
-            "vName": "1.0.0",
-        },
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         body={"kind": 1, "code": code},
     )
     cred_data = cred.get("data") if isinstance(cred.get("data"), dict) else {}
     result = cred_data.get("cred")
-    if cred.get("message") != "OK" or not isinstance(result, str):
-        raise SklandError("森空岛凭据生成失败，请重新扫码")
-    return result
+    if cred.get("code", 0) != 0 or cred.get("message") != "OK" or not isinstance(result, str) or not result:
+        raise _upstream_error("森空岛凭据生成失败，请重新扫码", cred)
+    return Credential(result, str(cred_data.get("token") or ""), _server_time(cred))
 
 
 def _sign(token: str, path: str, query: str, timestamp: str) -> str:
@@ -142,10 +158,14 @@ def _sign(token: str, path: str, query: str, timestamp: str) -> str:
 
 
 class Client:
-    def __init__(self, credential: str):
-        self.credential = credential
-        self.token = ""
-        self.timestamp = ""
+    def __init__(self, credential: str | Credential):
+        auth = credential if isinstance(credential, Credential) else Credential(credential)
+        self.credential = auth.credential
+        self.token = auth.token
+        self.clock_offset = auth.server_time - time.time() if auth.server_time else 0.
+
+    def _timestamp(self) -> str:
+        return str(int(time.time() + self.clock_offset) - 2)
 
     def _headers(self, timestamp: str, sign: str) -> dict[str, str]:
         return {
@@ -161,27 +181,28 @@ class Client:
         }
 
     def _refresh(self) -> None:
-        timestamp = str(int(time.time()))
+        timestamp = self._timestamp()
         path = "/api/v1/auth/refresh"
         sign = _sign("", path, "", timestamp)
         headers = {**self._headers(timestamp, sign), "cred": self.credential}
         value = _request(f"{SKLAND_BASE}{path}", headers=headers)
         data = value.get("data") if isinstance(value.get("data"), dict) else {}
         if value.get("code") != 0 or value.get("message") != "OK" or not isinstance(data.get("token"), str):
-            raise SklandError("森空岛凭据已失效，请重新扫码")
+            raise _upstream_error("刷新森空岛签名凭据失败，请重新扫码", value)
         self.token = data["token"]
-        self.timestamp = str(value.get("timestamp") or timestamp)
+        if _server_time(value):
+            self.clock_offset = _server_time(value) - time.time()
 
     def get(self, path: str, query: str = "") -> dict:
         if not self.token:
             self._refresh()
-        timestamp = self.timestamp or str(int(time.time()))
+        timestamp = self._timestamp()
         sign = _sign(self.token, path, query, timestamp)
         headers = {**self._headers(timestamp, sign), "cred": self.credential, "token": self.token}
         suffix = f"?{query}" if query else ""
         value = _request(f"{SKLAND_BASE}{path}{suffix}", headers=headers)
         if value.get("code") != 0 or value.get("message") != "OK":
-            raise SklandError(str(value.get("message") or "读取森空岛数据失败"))
+            raise _upstream_error("读取森空岛数据失败", value)
         return value
 
     def bindings(self) -> list[dict]:

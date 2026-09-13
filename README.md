@@ -63,6 +63,10 @@ cd /Users/xzhy/Workspace/MaaBaseOptimizer
 
 ## 导入自己的 Box
 
+点击“森空岛同步”，用森空岛 App 扫码并在手机上确认，再选择游戏角色并导入。二维码有效期为 2 分钟；完成凭据交换后，选择角色和导入的会话保留 10 分钟。干员列表保存在本机 `data/user_roster.json`（已排除出 Git），登录凭据仅在内存中使用，导入后移除会话。
+
+2026-09-14 扫码修复：凭据交换与后续签名统一使用原生客户端接口，复用返回的签名 token；同一二维码的并发轮询只兑换一次授权码，签名时间随时钟更新。旧版将随机设备标识用于 Web 接口，会收到“设备信息无效”。接口流程参考 [goofish-infrast 的森空岛客户端](https://github.com/ntgmc/goofish-infrast-public/blob/main/server/handlers/skland-client.ts)。
+
 点击“导入 MAA 识别结果”，选择包含 `own_opers` 的 MAA `OperBox` 回调 JSON。程序允许 `own_opers` 位于根对象、`details`、`data`、`result` 或回调数组中。最小格式见 `examples/operbox_sample.json`。
 
 每一项需要这些字段：

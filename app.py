@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 CATALOG = json.loads((ROOT / "data" / "catalog.json").read_text(encoding="utf-8"))
 ROSTER_PATH = ROOT / "data" / "user_roster.json"
-APP_REVISION = "2026.09.14-login-morale-v13"
+APP_REVISION = "2026.09.14-skland-login-v14"
 SCAN_SESSIONS: dict[str, dict] = {}
 SCAN_LOCK = threading.Lock()
 
@@ -52,11 +52,43 @@ def _scan_session(scan_id: str) -> dict:
         return session
 
 
+def _scan_status(scan_id: str) -> dict:
+    session = _scan_session(scan_id)
+    # setInterval clients can overlap while an upstream request is slow.
+    # A scan code is one-use: only one request may redeem it.
+    lock = session["poll_lock"]
+    if not lock.acquire(blocking=False):
+        return {"status": "processing"}
+    try:
+        if session.get("accounts"):
+            return {"status": "authorized", "accounts": session["accounts"]}
+        if not session.get("client"):
+            scan_code = get_scan_code(scan_id)
+            if not scan_code:
+                return {"status": "waiting"}
+            session["expires_at"] = time.time() + 120
+            credential = credential_from_scan_code(scan_code)
+            session["credential"] = credential
+            session["client"] = SklandClient(credential)
+            # QR validity limits scanning, not subsequent account selection.
+            session["expires_at"] = time.time() + 600
+        # Cache the client before loading bindings, so a failed binding read
+        # never consumes the scan code again. Secrets stay only in memory.
+        session["accounts"] = session["client"].bindings()
+        return {"status": "authorized", "accounts": session["accounts"]}
+    finally:
+        lock.release()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "MaaBaseOptimizer/0.1"
 
     def log_message(self, fmt: str, *args: object) -> None:
-        print(f"[{self.log_date_time_string()}] {fmt % args}")
+        message = fmt % args
+        if "/api/skland/" in message:
+            import re
+            message = re.sub(r"scan_id=[^ &\"]+", "scan_id=[redacted]", message)
+        print(f"[{self.log_date_time_string()}] {message}")
 
     def _json(self, status: int, value: object) -> None:
         body = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -103,21 +135,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/skland/scan/status":
             try:
                 scan_id = (parse_qs(parsed.query).get("scan_id") or [""])[0]
-                session = _scan_session(scan_id)
-                if session.get("credential"):
-                    self._json(200, {"status": "authorized", "accounts": session["accounts"]})
-                    return
-                scan_code = get_scan_code(scan_id)
-                if not scan_code:
-                    self._json(200, {"status": "waiting"})
-                    return
-                credential = credential_from_scan_code(scan_code)
-                accounts = SklandClient(credential).bindings()
-                with SCAN_LOCK:
-                    session["credential"] = credential
-                    session["accounts"] = accounts
-                self._json(200, {"status": "authorized", "accounts": accounts})
+                self._json(200, _scan_status(scan_id))
             except (ValueError, SklandError) as exc:
+                self.log_message("森空岛扫码失败：%s", str(exc))
                 self._json(400, {"error": str(exc)})
             return
         relative = "index.html" if path in {"", "/"} else path.lstrip("/")
@@ -150,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
                     expired = [key for key, value in SCAN_SESSIONS.items() if float(value["expires_at"]) < time.time()]
                     for key in expired:
                         SCAN_SESSIONS.pop(key, None)
-                    SCAN_SESSIONS[scan["scan_id"]] = dict(scan)
+                    SCAN_SESSIONS[scan["scan_id"]] = {**scan, "poll_lock": threading.Lock()}
                 self._json(200, {
                     "scan_id": scan["scan_id"],
                     "expires_at": scan["expires_at"],
@@ -169,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
                 account = next((x for x in accounts if x.get("uid") == uid), None)
                 if not account:
                     raise ValueError("所选角色不在本次森空岛授权的绑定列表中")
-                roster = SklandClient(credential).operators(uid, CATALOG)
+                roster = session["client"].operators(uid, CATALOG)
                 roster = save_roster(ROSTER_PATH, roster, CATALOG)
                 with SCAN_LOCK:
                     SCAN_SESSIONS.pop(scan_id, None)
@@ -184,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, simulate(payload, CATALOG))
             else:
                 self._json(404, {"error": "unknown endpoint"})
-        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError, SklandError) as exc:
             self._json(400, {"error": str(exc)})
         except Exception as exc:  # keep local UI usable and show actionable error
             self._json(500, {"error": f"计算失败：{exc.__class__.__name__}: {exc}"})
