@@ -258,7 +258,10 @@ def _run(schedules: list[dict], cycle: float, horizon: float, interval: float,
         drone_bank -= spent
         if capture:
             ledger.append({"hour": round(end / 60, 6), "gold": round(gold, 6), "shards": round(shards, 6),
-                           "collected": dict(collected), "drones": round(drone_bank, 6)})
+                           "collected": {**collected,
+                               "lmd_shard_cost_per_day": totals["shards_made_per_day"] * (1000 if metrics.get("shard_recipe") == "device" else 1600),
+                               "lmd_net_after_shards_per_day": collected["lmd_per_day"] - totals["shards_made_per_day"] * (1000 if metrics.get("shard_recipe") == "device" else 1600)},
+                           "drones": round(drone_bank, 6)})
             drone_events.append({"minute": round(end, 6), "drones_spent": spent,
                                  "drones_remaining": round(drone_bank, 6)})
         return busy
@@ -318,10 +321,13 @@ def simulate(payload: dict, catalog: dict | None = None) -> dict:
                        if stochastic else first["daily"])
     simulated = {key: round(fmean(sample[key] for sample in samples), 6) for key in first["daily"]}
     lmd_samples = [sample["lmd_per_day"] for sample in samples]
+    net_samples = [sample["lmd_net_after_shards_per_day"] for sample in samples]
+    simulated.update(lmd_net_p05=round(_percentile(net_samples, .05), 3),
+                     lmd_net_p95=round(_percentile(net_samples, .95), 3))
     simulated.update(lmd_p05=round(_percentile(lmd_samples, .05), 3), lmd_p95=round(_percentile(lmd_samples, .95), 3))
     differences = {key: (round((simulated[key] - expected[key]) / abs(expected[key]) * 100, 3)
                         if isinstance(expected.get(key), (int, float)) and abs(expected[key]) > EPS else None)
-                   for key in KEYS}
+                   for key in (*KEYS, "lmd_shard_cost_per_day", "lmd_net_after_shards_per_day")}
     assumptions = [
         "离散事件快进：同一虚拟时钟逐件/逐单完成，跨班保留物理房间进度；无真实时间等待。",
         "按实际换班时间切换倍率；整点技能分段，品质按订单开始时的在岗时间线性暖机，换班重新暖机。",
@@ -337,7 +343,8 @@ def simulate(payload: dict, catalog: dict | None = None) -> dict:
         assumptions.append("旧版实际在岗比例输入按每日开头连续在岗处理；完整 A/B 重放须提供 rotation。")
     return {"engine": "discrete_event", "days": days, "trials": trials, "seed": public_seed,
             "virtual_minutes": days * 1440, "morale": first["morale"], "inventory_policy": "working_stock", "simulated": simulated, "sample_run": first["daily"],
-            "standard_deviation": {"lmd_per_day": round(pstdev(lmd_samples), 3)},
+            "standard_deviation": {"lmd_per_day": round(pstdev(lmd_samples), 3),
+                                   "lmd_net_after_shards_per_day": round(pstdev(net_samples), 3)},
             "expected": expected, "difference_percent": differences, "assumptions": assumptions,
             **{key: first[key] for key in ("trace", "collection_events", "drone_events", "pending_output",
                                           "completed_output", "work_in_progress")},

@@ -18,13 +18,8 @@
       <section id="boxSetup" class="rail-card">
         <div class="rail-heading"><div><span class="section-index">01</span><h2>干员 Box</h2></div><span class="count-pill"><strong id="rosterCount">0</strong> 人</span></div>
         <div class="box-actions"><button class="primary" id="sklandButton">森空岛同步</button><button id="importButton">导入 MAA</button><input id="fileInput" type="file" accept="application/json,.json" hidden></div>
-        <div class="operator-add"><input id="operatorSearch" list="operatorList" placeholder="添加干员"><datalist id="operatorList"></datalist><button id="addButton">添加 E2</button></div>
         <div id="importMessage" class="message hidden"></div>
-        <details class="compact-disclosure roster-drawer">
-          <summary><span>管理干员与精英阶段</span><b>⌄</b></summary>
-          <div class="roster-table-wrap"><table class="roster-table"><thead><tr><th>干员</th><th>阶段</th><th></th></tr></thead><tbody id="rosterBody"><tr><td colspan="3" class="empty">尚未导入干员</td></tr></tbody></table></div>
-          <div class="drawer-actions"><button class="quiet" id="saveButton">保存</button><button class="quiet danger" id="clearButton">清空</button></div>
-        </details>
+        <button id="manageRosterButton" class="roster-launch" type="button"><span id="rosterPreview" class="roster-preview"></span><span><strong>管理干员池</strong><small>搜索、排序与精英阶段</small></span><b>↗</b></button>
       </section>
 
       <section id="productionSetup" class="rail-card controls">
@@ -64,7 +59,7 @@
             <label><span>轮班策略</span><select id="scheduleMode"><option value="staggered">各房间独立换班</option><option value="morale_aware">整套班组换班（对照）</option><option value="fixed">固定等长（对照）</option></select></label>
             <div class="split-control"><label><span>连续工作上限</span><select id="shiftHours"><option value="36">自动按心情（≤36h）</option><option value="24">24 小时</option><option value="16">16 小时</option><option value="12">12 小时</option><option value="8">8 小时</option></select></label><label><span>可上线间隔</span><select id="collectionInterval"><option value="2">每 2 小时</option><option value="4">每 4 小时</option><option value="6">每 6 小时</option><option value="8">每 8 小时</option><option value="12">每 12 小时</option></select></label></div>
             <label class="switch-control"><input id="lockDormHelper" type="checkbox" checked><span><b>锁定宿舍恢复位</b><small>占用一张床并增强其余床位</small></span></label>
-            <label class="switch-control"><input id="enableFiammetta" type="checkbox" checked><span><b>启用菲亚梅塔</b><small>拥有时纳入换班搜索</small></span></label>
+            <label id="fiammettaOption" class="switch-control" hidden><input id="enableFiammetta" type="checkbox" checked><span><b>启用菲亚梅塔</b><small>拥有时纳入换班搜索</small></span></label>
           </div>
         </details>
 
@@ -81,12 +76,12 @@
       <section id="results" class="results hidden">
         <div class="result-heading"><div><span class="section-index">RESULT</span><h1>推荐方案</h1></div><span id="solverBadge" class="badge"></span></div>
         <div class="kpis">
-          <article class="kpi-primary"><span>龙门币 / 日</span><strong id="lmdKpi">—</strong><small>解析期望</small></article><article><span>作战经验 / 日</span><strong id="expKpi">—</strong><small>解析期望</small></article><article><span>赤金净流 / 日</span><strong id="goldKpi">—</strong><small id="goldKpiNote">含外部来源</small></article><article><span>无人机 / 日</span><strong id="droneKpi">—</strong><small id="droneKpiNote">发电站合计</small></article>
+          <article class="kpi-primary"><span>龙门币净收入 / 日</span><strong id="lmdKpi">—</strong><small id="lmdKpiNote">赤金贸易收入 − 搓玉消耗</small></article><article><span>作战经验 / 日</span><strong id="expKpi">—</strong><small>解析期望</small></article><article><span>赤金净流 / 日</span><strong id="goldKpi">—</strong><small id="goldKpiNote">含外部来源</small></article><article><span>无人机 / 日</span><strong id="droneKpi">—</strong><small id="droneKpiNote">发电站合计</small></article>
         </div>
         <nav class="result-tabs" aria-label="结果视图"><button class="active" data-result-tab="overview">总览</button><button data-result-tab="schedule">排班</button><button data-result-tab="mechanics">机制</button><button data-result-tab="simulation">模拟</button></nav>
 
         <div class="tab-panel active" data-tab-panel="overview">
-          <article class="panel yield-curve-panel"><div class="card-heading"><div><span class="card-kicker">24H TRACE</span><h2>产出曲线</h2></div><label class="curve-picker"><span>资源</span><select id="curveMetric"><option value="lmd_per_day">龙门币</option><option value="exp_per_day">作战经验</option><option value="gold_net_per_day">赤金净流量</option><option value="gold_made_per_day">赤金制造</option><option value="gold_used_per_day">赤金消耗</option><option value="orundum_per_day">合成玉</option><option value="drones_per_day">无人机</option></select></label></div><div id="yieldCurve" class="yield-curve"></div></article>
+          <article class="panel yield-curve-panel"><div class="card-heading"><div><span class="card-kicker">24H TRACE</span><h2>产出曲线</h2></div><label class="curve-picker"><span>资源</span><select id="curveMetric"><option value="lmd_net_after_shards_per_day">龙门币净收入</option><option value="lmd_per_day">赤金贸易收入</option><option value="lmd_shard_cost_per_day">搓玉龙门币消耗</option><option value="exp_per_day">作战经验</option><option value="gold_net_per_day">赤金净流量</option><option value="gold_made_per_day">赤金制造</option><option value="gold_used_per_day">赤金消耗</option><option value="orundum_per_day">合成玉</option><option value="drones_per_day">无人机</option></select></label></div><div id="yieldCurve" class="yield-curve"></div></article>
           <div class="overview-grid"><article class="panel production-console"><div class="card-heading"><div><span class="card-kicker">FLOW</span><h2>每日吞吐</h2></div><span class="live-pill"><i></i>期望</span></div><div id="productionMonitor" class="production-monitor"></div></article><article class="panel resource-chart"><div class="card-heading"><div><span class="card-kicker">COMPARE</span><h2>资源对比</h2></div></div><div id="barChart" class="bar-chart"></div></article></div>
         </div>
 
@@ -101,7 +96,7 @@
         </div>
 
         <div class="tab-panel" data-tab-panel="simulation">
-          <article class="panel simulator-panel" id="simulation"><div class="card-heading"><div><span class="card-kicker">MONTE CARLO</span><h2>随机快进</h2></div></div><div class="sim-controls"><label><span>天数</span><input id="simDays" type="number" min="1" max="365" value="30"></label><label><span>试验次数</span><input id="simTrials" type="number" min="100" max="5000" step="100" value="1000"></label><label><span>随机种子（可留空）</span><input id="simSeed" type="text" inputmode="numeric" placeholder="每次随机"></label><label><span>库存策略</span><select id="simInventoryPolicy"><option value="working_stock">显示所需周转库存</option><option value="strict">库存不足时延后交单</option></select></label><button id="simulateButton" class="primary">运行模拟</button></div><div id="simulateMessage" class="message hidden"></div><div id="simulationResult" class="simulation-result hidden"></div></article>
+          <article class="panel simulator-panel" id="simulation"><div class="card-heading"><div><span class="card-kicker">MONTE CARLO</span><h2>随机快进</h2></div></div><div class="sim-controls"><label><span>天数</span><input id="simDays" type="number" min="1" max="365" value="30"></label><label><span>试验次数</span><input id="simTrials" type="number" min="100" max="5000" step="100" value="1000"></label><label><span>随机种子（可留空）</span><input id="simSeed" type="text" inputmode="numeric" placeholder="每次随机"></label><label><span>库存策略</span><select id="simInventoryPolicy"><option value="working_stock">显示所需周转库存</option></select></label><button id="simulateButton" class="primary">运行模拟</button></div><div id="simulateMessage" class="message hidden"></div><div id="simulationResult" class="simulation-result hidden"></div></article>
           <article class="panel quick-card"><div class="side-title"><span class="side-icon sim-icon">▶</span><div><small>AUTO CHECK</small><h3>自动校准</h3></div></div><div id="quickSimulation" class="quick-simulation"><p>计算后自动运行。</p></div></article>
         </div>
       </section>
@@ -111,7 +106,17 @@
   <dialog id="sklandDialog" class="skland-dialog">
     <div class="dialog-head"><div><span class="card-kicker">SKLAND</span><h2>同步干员 Box</h2></div><button class="quiet" id="closeSklandButton" aria-label="关闭">关闭</button></div><p class="dialog-copy">使用森空岛 App 扫码授权。凭据仅保留在本次进程中。</p><div class="qr-wrap"><img id="sklandQr" alt="鹰角扫码登录二维码"><div id="qrPlaceholder">正在生成二维码…</div></div><div id="sklandMessage" class="message">正在连接…</div><label id="accountPicker" class="account-picker hidden"><span>游戏角色</span><select id="sklandAccount"></select></label><button id="confirmSklandButton" class="optimize hidden">导入此角色</button><button id="retrySklandButton" class="quiet hidden">重新生成二维码</button>
   </dialog>
+  <dialog id="rosterDialog" class="roster-dialog" aria-labelledby="rosterDialogTitle">
+    <div class="dialog-head"><div><span class="card-kicker">OPERATOR POOL</span><h2 id="rosterDialogTitle">干员管理 <span><b id="rosterDraftCount">0</b> 人</span></h2></div><button id="closeRosterButton" type="button" class="quiet">取消</button></div>
+    <div class="roster-toolbar"><label class="roster-search"><span>查找干员</span><input id="rosterFilter" type="search" placeholder="输入干员名字" autocomplete="off"></label><label><span>星级</span><select id="rosterRarity"><option value="0">全部星级</option><option value="6">6 星</option><option value="5">5 星</option><option value="4">4 星</option><option value="3">3 星</option><option value="2">2 星</option><option value="1">1 星</option></select></label><label><span>排序</span><select id="rosterSort"><option value="rarity">星级优先</option><option value="name">名称顺序</option></select></label></div>
+    <div class="roster-scroll"><div id="rosterTiers"></div><details class="candidate-pool" open data-drop-phase="-1"><summary>候选干员 <span id="rosterAvailableCount">0</span><small>拖入上方即可加入 · 拖回此处即可移除</small></summary><div id="rosterAvailable" class="tier-pool available-pool"></div></details></div>
+    <div id="rosterInspector" class="roster-inspector"></div>
+    <div class="roster-footer"><p id="rosterEditStatus" role="status"></p><button id="clearButton" type="button" class="quiet danger">清空草稿</button><button id="saveButton" type="button" class="primary">保存干员列表</button></div>
+  </dialog>
+  <div id="operatorPopover" class="operator-popover" role="tooltip" hidden></div>
   <script src="/vendor/echarts.min.js"></script>
+  <script src="/view-model.js"></script>
+  <script src="/roster.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

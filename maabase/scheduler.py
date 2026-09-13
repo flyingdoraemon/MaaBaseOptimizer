@@ -452,6 +452,10 @@ def _instant_rates(team: dict, elapsed_hours: float) -> dict[str, float]:
     shards_used *= _room_output_ratio(
         orundum, elapsed_hours, lambda room: (room.get("orundum") or {}).get("shards_per_day", 0)
     )
+    rates["shards_made_per_day"] = shards_made
+    rates["shards_used_per_day"] = shards_used
+    rates["lmd_shard_cost_per_day"] = shards_made * (1000 if metrics.get("shard_recipe") == "device" else 1600)
+    rates["lmd_net_after_shards_per_day"] = rates["lmd_per_day"] - rates["lmd_shard_cost_per_day"]
     rates["shards_net_per_day"] = shards_made - shards_used
     external_gold = (
         float(base_metrics.get("gold_net_per_day", 0) or 0)
@@ -503,6 +507,8 @@ def _production_curve(
     metric_keys = (
         "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
         "gold_net_per_day", "orundum_per_day", "shards_net_per_day", "drones_per_day",
+        "shards_made_per_day", "shards_used_per_day",
+        "lmd_shard_cost_per_day", "lmd_net_after_shards_per_day",
     )
     cycle = durations["A"] + durations["B"]
 
@@ -562,6 +568,10 @@ def _production_curve(
             event_deltas["gold_net_per_day"] = (
                 event_deltas.get("gold_made_per_day", 0) - event_deltas.get("gold_used_per_day", 0)
             )
+            event_deltas["shards_net_per_day"] = event_deltas["shards_made_per_day"] - event_deltas["shards_used_per_day"]
+            recipe = (teams[outgoing].get("metrics") or {}).get("shard_recipe", "rock")
+            event_deltas["lmd_shard_cost_per_day"] = event_deltas["shards_made_per_day"] * (1000 if recipe == "device" else 1600)
+            event_deltas["lmd_net_after_shards_per_day"] = event_deltas["lmd_per_day"] - event_deltas["lmd_shard_cost_per_day"]
             # Drones are a generated-flow trace; spending them changes the bank
             # but does not erase the cumulative number recovered.
             for key, value in event_deltas.items():
@@ -779,7 +789,10 @@ def build_staggered_production_curve(
     metric_keys = (
         "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
         "gold_net_per_day", "orundum_per_day", "shards_net_per_day", "drones_per_day",
+        "shards_made_per_day", "shards_used_per_day",
+        "lmd_shard_cost_per_day", "lmd_net_after_shards_per_day",
     )
+    shard_cost = 1000 if (rotation.get("average_metrics") or {}).get("shard_recipe") == "device" else 1600
     candidates: dict[tuple[str, str], dict] = {}
     for label, plan in (rotation.get("teams") or {}).items():
         for room in [*(plan.get("support_rooms") or []), *(plan.get("rooms") or [])]:
@@ -813,13 +826,17 @@ def build_staggered_production_curve(
         elif key == "exp":
             rates["exp_per_day"] = float(constants["exp_base_per_day"]) * _instant_multiplier(room, elapsed) / 24.0
         elif key == "shard":
-            rates["shards_net_per_day"] = 24.0 * _instant_multiplier(room, elapsed) / 24.0
+            rates["shards_made_per_day"] = _instant_multiplier(room, elapsed)
+            rates["shards_net_per_day"] = rates["shards_made_per_day"]
+            rates["lmd_shard_cost_per_day"] = rates["shards_made_per_day"] * shard_cost
         elif key == "orundum":
             economy = room.get("orundum") or {}
             rates["orundum_per_day"] = float(economy.get("orundum_per_day", 0) or 0) * ratio / 24.0
-            rates["shards_net_per_day"] = -float(economy.get("shards_per_day", 0) or 0) * ratio / 24.0
+            rates["shards_used_per_day"] = float(economy.get("shards_per_day", 0) or 0) * ratio / 24.0
+            rates["shards_net_per_day"] = -rates["shards_used_per_day"]
         elif key == "power":
             rates["drones_per_day"] = 10.0 * (5.0 + float(room.get("efficiency", 0) or 0)) / 100.0
+        rates["lmd_net_after_shards_per_day"] = rates["lmd_per_day"] - rates["lmd_shard_cost_per_day"]
         return rates
 
     def snapshot(hour: float) -> tuple[dict[str, float], list[tuple[str, dict, float]]]:
@@ -928,9 +945,13 @@ def build_staggered_production_curve(
                 event_deltas["gold_made_per_day"] += deltas.get("gold_made_per_day", 0.0)
                 event_deltas["gold_used_per_day"] += deltas.get("gold_used_per_day", 0.0)
                 event_deltas["orundum_per_day"] += deltas.get("orundum_per_day", 0.0)
+                event_deltas["shards_made_per_day"] += deltas.get("shards_made_per_day", 0.0)
+                event_deltas["shards_used_per_day"] += deltas.get("shards_used_per_day", 0.0)
                 event_deltas["shards_net_per_day"] += deltas.get("shards_made_per_day", 0.0) - deltas.get("shards_used_per_day", 0.0)
                 targets.append({**profile, "drones": round(amount, 3), "deltas": deltas})
             event_deltas["gold_net_per_day"] = event_deltas["gold_made_per_day"] - event_deltas["gold_used_per_day"]
+            event_deltas["lmd_shard_cost_per_day"] = event_deltas["shards_made_per_day"] * shard_cost
+            event_deltas["lmd_net_after_shards_per_day"] = event_deltas["lmd_per_day"] - event_deltas["lmd_shard_cost_per_day"]
             for key, value in event_deltas.items():
                 if key != "drones_per_day":
                     cumulative[key] += value

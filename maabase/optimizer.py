@@ -1095,6 +1095,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 for key in (
                     "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
                     "gold_net_per_day", "orundum_per_day", "shards_net_per_day",
+                    "shards_made_per_day", "shards_used_per_day", "lmd_shard_cost_per_day",
                 ):
                     if key in final_curve:
                         weighted_metrics[key] = round(float(final_curve[key]), 2)
@@ -1105,6 +1106,9 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 weighted_metrics["gold_inventory_days"] = (
                     None if float(weighted_metrics.get("gold_net_per_day", 0)) >= 0 else
                     round(gold_inventory / -float(weighted_metrics["gold_net_per_day"]), 1)
+                )
+                weighted_metrics["shard_material_used_per_day"] = round(
+                    float(weighted_metrics.get("shards_made_per_day", 0)) * (1 if shard_recipe == "device" else 2), 2,
                 )
                 weighted_metrics["lmd_net_after_shards_per_day"] = round(
                     float(weighted_metrics.get("lmd_per_day", 0))
