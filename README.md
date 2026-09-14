@@ -54,6 +54,8 @@ cd /Users/xzhy/Workspace/MaaBaseOptimizer
 
 应用默认打开 <http://127.0.0.1:8765>。所有干员数据和计算都留在本机。
 
+重复启动时会打开已经运行的服务。更新代码后，需要先在原服务终端按 Control-C 停止，再重新启动。若端口被其他程序占用，可以使用 `python app.py --port 8766` 指定另一个端口。
+
 如需使用 CBC 精确整数规划：
 
 ```bash

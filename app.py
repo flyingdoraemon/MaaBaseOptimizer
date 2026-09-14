@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import io
 import json
 import mimetypes
 import threading
 import time
 import webbrowser
+from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -30,7 +32,7 @@ from maabase.operator_catalog import operator_cards
 CATALOG = json.loads((ROOT / "data" / "catalog.json").read_text(encoding="utf-8"))
 OPERATOR_CARDS = operator_cards(CATALOG)
 ROSTER_PATH = ROOT / "data" / "user_roster.json"
-APP_REVISION = "2026.09.14-multiday-cards-v16"
+APP_REVISION = "2026.09.14-startup-v17"
 SCAN_SESSIONS: dict[str, dict] = {}
 SCAN_LOCK = threading.Lock()
 
@@ -91,7 +93,12 @@ class Handler(BaseHTTPRequestHandler):
         if "/api/skland/" in message:
             import re
             message = re.sub(r"scan_id=[^ &\"]+", "scan_id=[redacted]", message)
-        print(f"[{self.log_date_time_string()}] {message}")
+        try:
+            print(f"[{self.log_date_time_string()}] {message}")
+        except BrokenPipeError:
+            # A background launcher may exit and close its output pipe. Logging
+            # must not abort the HTTP response when the server is still alive.
+            pass
 
     def _json(self, status: int, value: object) -> None:
         body = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -118,6 +125,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
+        if path == "/api/health":
+            self._json(200, {"app": "MaaBaseOptimizer", "app_revision": APP_REVISION})
+            return
         if path == "/api/operators":
             operators = OPERATOR_CARDS
             self._json(200, {
@@ -209,14 +219,51 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": f"计算失败：{exc.__class__.__name__}: {exc}"})
 
 
+def _running_app_revision(host: str, port: int) -> str | None:
+    # Connect directly: local startup checks should not use a system HTTP proxy.
+    connection = HTTPConnection(host, port, timeout=2)
+    try:
+        connection.request("GET", "/api/health")
+        response = connection.getresponse()
+        if response.status != 200:
+            return None
+        data = json.loads(response.read(4096))
+        if isinstance(data, dict) and data.get("app") == "MaaBaseOptimizer":
+            revision = data.get("app_revision")
+            if isinstance(revision, str) and revision:
+                return revision
+    except (OSError, HTTPException, ValueError):
+        pass
+    finally:
+        connection.close()
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="明日方舟基建候选集排班优化器")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
-    url = f"http://{args.host}:{server.server_address[1]}"
+    browser_host = "127.0.0.1" if args.host in {"", "0.0.0.0"} else args.host
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        url = f"http://{browser_host}:{args.port}"
+        revision = _running_app_revision(browser_host, args.port)
+        if revision:
+            print(f"MaaBaseOptimizer 已在运行：{url}")
+            if revision != APP_REVISION:
+                print("正在运行的是旧版本；如需加载更新，请先停止原服务，再重新启动。")
+            if not args.no_browser:
+                webbrowser.open(url)
+            return
+        alternative_port = 8766 if args.port != 8766 else 8767
+        parser.exit(2, f"端口 {args.port} 已被其他程序占用，或旧服务没有响应。\n"
+                       f"请停止占用端口的旧服务后重试，或运行：python app.py --port {alternative_port}\n")
+    url = f"http://{browser_host}:{server.server_address[1]}"
     print(f"MaaBaseOptimizer 已启动：{url}")
     print("按 Control-C 停止。数据只在本机处理。")
     if not args.no_browser:
@@ -225,6 +272,8 @@ def main() -> None:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n已停止。")
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":
