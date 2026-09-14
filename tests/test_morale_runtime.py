@@ -88,7 +88,7 @@ class MoraleRuntimeTests(unittest.TestCase):
         self.assertEqual(events[0]['team'], events[-1]['team'])
         self.assertTrue(events[0]['continuation'])
         self.assertGreater(events[0]['elapsed_offset_hours'], 0)
-        self.assertTrue(all(6 <= e['time'] < 24 for e in rotation['handover_events']))
+        self.assertTrue(all(6 <= e['time'] % 24 < 24 for e in rotation['handover_events']))
         result = simulate({'rotation': rotation, 'days': 2, 'trials': 1})
         self.assertTrue(all(6 <= e['hour'] % 24 < 24 for e in result['collection_events']))
         self.assertFalse(result['morale']['exhausted_work_hours'])

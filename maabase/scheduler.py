@@ -24,17 +24,22 @@ def _annotate_control(team: dict) -> None:
 
 
 def _pairs(options: dict, collection: float, maximum: float) -> list[tuple[float, float]]:
-    if collection < 8:
-        # Start A at 06:00 and repeat at 06:00 the next day. The relief
-        # duration need not be a grid multiple: overnight logins are skipped.
-        daily = [(hour - 6, 30 - hour) for hour in login_hours(collection, 24)
-                 if hour > 6]
-        limited = [(a, b) for a, b in daily if max(a, b) <= maximum]
-        daily = limited or sorted(daily, key=lambda pair: max(pair))
-        safe = [(a, b) for a, b in daily if a <= max(options["A"]) and b <= max(options["B"])]
-        return safe or daily
     pairs = [(a, b) for a in options["A"] for b in options["B"]]
-    return [(a, b) for a, b in pairs if abs(a + b - 24) < 1e-9] or pairs
+    # Calendar-aligned 1/2/3-day cycles allow long shifts while preserving
+    # the same legal login times on every repetition.
+    if collection < 8:
+        nodes = login_hours(collection, 78)
+        pairs = [(a, b) for a in (hour - 6 for hour in nodes if hour > 6)
+                 for total in (24., 48., 72.) for b in (total - a,)
+                 if 0 < a <= max(options["A"]) and 0 < b <= max(options["B"])
+                 and a <= maximum and b <= maximum]
+        if not pairs:
+            # A short cap may be impossible across the quiet window. Keep
+            # handovers legal; continuous replay accounts for fatigue.
+            fallback = [(hour - 6, 30 - hour) for hour in nodes if 6 < hour < 24]
+            return sorted(fallback, key=lambda pair: (max(pair), abs(pair[0] - pair[1])))
+    periodic = [(a, b) for a, b in pairs if a + b in (24., 48., 72.)]
+    return periodic or pairs
 
 
 def _all_rooms(team: dict) -> list[dict]:
@@ -164,8 +169,7 @@ def _choose_durations(
     }
     best: tuple[float, float, float, float] | None = None
     pairs = _pairs(options, collection, maximum)
-    daily_pairs = [(a_hours, b_hours) for a_hours, b_hours in pairs if abs(a_hours + b_hours - 24.0) < 1e-9]
-    for a_hours, b_hours in (daily_pairs or pairs):
+    for a_hours, b_hours in pairs:
         trial_durations = {"A": a_hours, "B": b_hours}
         audit_a = _recovery_audit(team_a, a_hours, b_hours, dorm_helper, fiammetta)
         audit_b = _recovery_audit(team_b, b_hours, a_hours, dorm_helper, fiammetta)
@@ -174,9 +178,8 @@ def _choose_durations(
             continue
         cycle = a_hours + b_hours
         weighted = (scores["A"] * a_hours + scores["B"] * b_hours) / cycle
-        # The daily pairs keep the 24h trace equal to the repeating-cycle
-        # average; a non-daily fallback is used only when unavoidable.
-        tie = -abs(cycle - 24.0) / 100_000.0 + cycle / 10_000_000.0
+        # Equal yield: prefer fewer handovers and longer continuous work.
+        tie = cycle / 1_000_000.0
         candidate = (weighted + tie, cycle, a_hours, b_hours)
         if best is None or candidate > best:
             best = candidate
@@ -236,11 +239,7 @@ def _choose_room_durations(
     best: tuple[float, float, float, float, float] | None = None
     best_audits: tuple[dict, dict] | None = None
     pairs = _pairs(options, collection, maximum)
-    # A 24-hour room cycle makes the displayed 24h trace an exact repeating
-    # steady-state day.  Only fall back to a non-daily cycle if the login grid
-    # or recovery constraints make every daily split infeasible.
-    daily_pairs = [(a_hours, b_hours) for a_hours, b_hours in pairs if abs(a_hours + b_hours - 24.0) < 1e-9]
-    for a_hours, b_hours in (daily_pairs or pairs):
+    for a_hours, b_hours in pairs:
         # Use ordinary beds here.  A single locked helper cannot
         # simultaneously boost every independently rotating room.
         audit_a = _recovery_audit(teams["A"], a_hours, b_hours, None, fiammetta)
@@ -249,11 +248,10 @@ def _choose_room_durations(
             continue
         cycle = a_hours + b_hours
         weighted = (scores["A"] * a_hours + scores["B"] * b_hours) / cycle
-        # Real output dominates.  On the daily cycle, the stronger room
-        # can take every additional login interval that remains recoverable.
+        # Real output dominates; ties prefer fewer handovers.
         candidate = (
             weighted,
-            -abs(cycle - 24.0) / 100_000.0,
+            cycle / 100_000.0,
             cycle / 10_000_000.0,
             -abs(a_hours - b_hours) / 100_000_000.0,
             a_hours,
@@ -279,20 +277,14 @@ def _choose_room_durations(
 
 
 def _paired_rooms(team_a: dict, team_b: dict) -> list[tuple[dict, dict]]:
-    """Pair corresponding physical rooms while preserving facility order."""
-    buckets: dict[str, list[dict]] = {}
-    for room in _all_rooms(team_b):
-        buckets.setdefault(str(room.get("key") or ""), []).append(room)
-    positions: dict[str, int] = {}
-    pairs = []
-    for room_a in _all_rooms(team_a):
-        key = str(room_a.get("key") or "")
-        index = positions.get(key, 0)
-        positions[key] = index + 1
-        values = buckets.get(key, [])
-        if index < len(values):
-            pairs.append((room_a, values[index]))
-    return pairs
+    """Keep physical support rooms even when staffed in only one team."""
+    def empty(room):
+        return {**room, "operators": [], "names": [], "operator_profiles": [], "details": [],
+                "efficiency": 0, "multiplier": 1., "time_profiles": [], "context_effects": []}
+    a_rows = {(room.get("key"), room["room"]): room for room in _all_rooms(team_a)}
+    b_rows = {(room.get("key"), room["room"]): room for room in _all_rooms(team_b)}
+    keys = list(dict.fromkeys([*a_rows, *b_rows]))
+    return [(a_rows.get(key) or empty(b_rows[key]), b_rows.get(key) or empty(a_rows[key])) for key in keys]
 
 
 def _average_metrics(a: dict, b: dict, a_hours: float = 1.0, b_hours: float = 1.0) -> dict:
@@ -466,7 +458,7 @@ def _instant_rates(team: dict, elapsed_hours: float) -> dict[str, float]:
     return rates
 
 
-def _summarize_drone_events(drone_events: list[dict]) -> dict:
+def _summarize_drone_events(drone_events: list[dict], days: float = 1.0) -> dict:
     allocation_totals: dict[tuple[str, str, str], dict] = {}
     drone_deltas: dict[str, float] = {}
     for event in drone_events:
@@ -477,11 +469,11 @@ def _summarize_drone_events(drone_events: list[dict]) -> dict:
                 "target": target.get("target"), "target_operators": target.get("target_operators") or [],
                 "drones_per_day": 0.0, "deltas": {},
             })
-            row["drones_per_day"] += float(target.get("drones", 0) or 0)
+            row["drones_per_day"] += float(target.get("drones", 0) or 0) / days
             for name, value in (target.get("deltas") or {}).items():
-                row["deltas"][name] = row["deltas"].get(name, 0.0) + float(value or 0)
-                drone_deltas[name] = drone_deltas.get(name, 0.0) + float(value or 0)
-    spent_total = sum(float(event.get("drones_spent", 0) or 0) for event in drone_events)
+                row["deltas"][name] = row["deltas"].get(name, 0.0) + float(value or 0) / days
+                drone_deltas[name] = drone_deltas.get(name, 0.0) + float(value or 0) / days
+    spent_total = sum(float(event.get("drones_spent", 0) or 0) for event in drone_events) / days
     allocations = []
     for row in allocation_totals.values():
         amount = float(row["drones_per_day"])
@@ -622,8 +614,7 @@ def _build_staggered_rotation(
     objective_mode: str,
     horizon_hours: float | None,
 ) -> dict:
-    """Build a 24-hour room-level schedule with independent handovers."""
-    horizon = 24.0 if horizon_hours is None else max(1.0, min(168.0, float(horizon_hours)))
+    """Build independent room cycles, retaining their complete common period."""
     pairs = _paired_rooms(team_a, team_b)
     room_rows = []
     room_work_hours: dict[str, dict] = {}
@@ -642,23 +633,15 @@ def _build_staggered_rotation(
         )
         plans.append({"name": name, "a": room_a, "b": room_b, "durations": durations, "audit": audit})
 
-    # A candidate with context effects was evaluated under its own team's full
-    # control/cross-room state.  Such rooms must change together with that
-    # state; otherwise a mixed A/B interval would silently apply the wrong
-    # control-center or material count.  Purely local rooms remain independent.
-    context_durations, context_reason = _choose_durations(
-        team_a, team_b, collection, floor, maximum, dorm_helper, fiammetta, objective_mode
-    )
-    for plan in plans:
-        has_context_dependency = plan["a"].get("key") == "control" or any(
-            room.get("context_effects") for room in (plan["a"], plan["b"])
-        )
-        if has_context_dependency:
-            plan["durations"] = dict(context_durations)
-            plan["audit"] = {
-                **plan["audit"], "synchronized_context": True,
-                "synchronization_reason": "依赖控制中枢或跨房间状态，必须与全局状态同时切换",
-            }
+    # Cross-room effects are evaluated against the actual simultaneous
+    # assignments during integration/replay, so local rooms need not share a
+    # handover with the whole base.
+    context_reason = "跨房间技能按同时在岗人员重新计算。"
+
+    period_minutes = math.lcm(*(round(sum(plan["durations"].values()) * 60) for plan in plans)) if plans else 1440
+    period = period_minutes / 60
+    display = 72.0 if horizon_hours is None else max(1.0, min(168.0, float(horizon_hours)))
+    horizon = math.ceil(display / period) * period
 
     for plan in plans:
         name, room_a, room_b = plan["name"], plan["a"], plan["b"]
@@ -728,7 +711,8 @@ def _build_staggered_rotation(
     room_rows.sort(key=lambda row: (room_order.get(row.get("key"), 99), row["room"]))
     return {
         "cycle_hours": horizon,
-        "natural_cycle_hours": None,
+        "display_hours": display,
+        "natural_cycle_hours": period,
         "shift_hours": requested,
         "schedule_mode": "staggered",
         "objective_mode": objective_mode,
@@ -739,7 +723,7 @@ def _build_staggered_rotation(
         "room_duration_audit": room_audits,
         "duration_reason": (
             f"各房间独立枚举每 {collection:g} 小时上线节点；纯本地技能按本房间产出决定工时，"
-            f"依赖跨房间状态的设施同步切换。{context_reason}"
+            f"{context_reason}"
         ),
         "pattern": [],
         "shifts": [],
@@ -783,9 +767,11 @@ def build_staggered_production_curve(
     drone_target: str,
     external_gold_per_day: float,
     gold_net_target_per_day: float,
-    minutes: int = 1440,
+    minutes: int | None = None,
+    catalog: dict | None = None,
 ) -> dict:
-    """Integrate a room-staggered schedule and spend drones at login nodes."""
+    """Integrate a complete common period; presentation may show fewer days."""
+    minutes = minutes or round(rotation["cycle_hours"] * 60)
     metric_keys = (
         "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
         "gold_net_per_day", "orundum_per_day", "shards_net_per_day", "drones_per_day",
@@ -799,7 +785,18 @@ def build_staggered_production_curve(
             candidates[(label, str(room.get("room") or ""))] = room
     events_by_room = {row["room"]: row.get("events", []) for row in rotation.get("rooms", [])}
 
+    compiled = None
+    if catalog:
+        from .simulator import _schedules, _source
+        from .morale_runtime import compile_morale
+        schedules, period = _schedules({"rotation": rotation})
+        compiled, _ = compile_morale(schedules, period, minutes, rotation["collection_interval_hours"] * 60,
+                                      rotation, catalog)
+
     def active(hour: float) -> list[tuple[str, dict, float]]:
+        if compiled:
+            return [(room.get("_team", "A"), room, elapsed / 60)
+                    for row in compiled for room, elapsed in [_source(row, hour * 60, minutes)] if room]
         result = []
         for room_name, events in events_by_room.items():
             event = next(
@@ -896,7 +893,16 @@ def build_staggered_production_curve(
 
     cumulative = {key: 0.0 for key in metric_keys}
     points = []
-    drone_bank = 0.0
+    # The analytical curve is a repeating schedule. Carry the drones charged
+    # since the preceding evening's final login across midnight.
+    quiet = rotation.get("schedule_mode") != "fixed"
+    previous_nodes = login_hours(float(rotation["collection_interval_hours"]), 24, quiet=quiet)
+    carry_hours = 24 - previous_nodes[-1] if previous_nodes else 0.
+    period = float(rotation.get("natural_cycle_hours") or rotation["cycle_hours"])
+    drone_bank = min(DRONE_CAPACITY, sum(snapshot(period - carry_hours + i / 4)[0]["drones_per_day"] / 4
+                     for i in range(round(carry_hours * 4))))
+    initial_drone_bank = drone_bank
+    cumulative["drones_per_day"] = drone_bank
     recovered = 0.0
     overflow = 0.0
     drone_events = []
@@ -973,7 +979,8 @@ def build_staggered_production_curve(
         "hours": minutes / 60.0, "step_minutes": step, "points": points,
         "drone_events": drone_events, "metrics": list(metric_keys),
         "drone_recovered": round(recovered, 3), "drone_overflow": round(overflow, 3),
-        "drone_summary": _summarize_drone_events(drone_events),
+        "initial_drone_inventory": round(initial_drone_bank, 3),
+        "drone_summary": _summarize_drone_events(drone_events, minutes / 1440),
         "note": (f"按每个房间的独立班次每 15 分钟积分；每 {rotation['collection_interval_hours']:g} 小时上线时统一收取并投入无人机。"
                  "悬停可查看混合 A/B 状态下的实时速率。"),
     }
@@ -998,7 +1005,7 @@ def build_rotation(
     In morale-aware mode, each team works until the latest collection event
     before either its morale floor or continuous-work cap.
     """
-    requested = max(1.0, min(24.0, float(shift_hours)))
+    requested = max(1.0, min(36.0, float(shift_hours)))
     collection = max(1.0, min(24.0, float(collection_interval_hours or requested)))
     maximum = max(1.0, min(36.0, float(max_work_hours or requested)))
     floor = max(0.0, min(23.0, float(morale_floor)))

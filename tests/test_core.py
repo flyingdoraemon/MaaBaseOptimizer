@@ -325,7 +325,7 @@ class CoreTests(unittest.TestCase):
         self.assertGreater(trade["A"], trade["B"])
         self.assertEqual(gold, {"A": 12, "B": 12})
         self.assertNotEqual(trade, gold)
-        self.assertEqual(sorted(event["time"] for event in rotation["handover_events"]), [6, 18, 22])
+        self.assertEqual(sorted(event["time"] for event in rotation["handover_events"] if event["time"] < 24), [6, 18, 22])
 
     def test_multi_facility_operator_audit_reports_single_assignment(self):
         roster = [{"id": "char_502_nblade", "elite": 0, "level": 30}]

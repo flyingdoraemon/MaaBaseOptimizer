@@ -33,12 +33,12 @@
         </div>
 
         <details class="compact-disclosure settings-disclosure">
-          <summary><span>无人机与库存</span><b>⌄</b></summary>
+          <summary><span>无人机与配方</span><b>⌄</b></summary>
           <div class="control-stack">
             <label><span>无人机用途</span><select id="droneTarget"><option value="auto_balance">自动动态分流</option><option value="trade">贸易订单</option><option value="gold">赤金制造</option><option value="exp">作战记录制造</option><option value="shard">源石碎片制造</option><option value="orundum">源石订单</option><option value="none">不计入</option></select></label>
             <label><span>赤金净流下限 / 日</span><input id="goldNetTarget" type="number" min="-999" max="999" step="1" value="-20"></label>
-            <div class="split-control"><label><span>外部赤金 / 日</span><input id="dailyGold" type="number" min="0" max="999" step="1" value="0"></label><label><span>外部赤金 / 周</span><input id="weeklyGold" type="number" min="0" max="9999" step="1" value="0"></label></div>
-            <div class="split-control"><label><span>赤金库存</span><input id="goldInventory" type="number" min="0" max="9999999" step="1" value="0"></label><label><span>碎片库存</span><input id="shardInventory" type="number" min="0" max="9999999" step="1" value="0"></label></div>
+
+
             <label><span>碎片配方</span><select id="shardRecipe"><option value="rock">固源岩</option><option value="device">装置</option></select></label>
           </div>
         </details>
@@ -81,8 +81,8 @@
         <nav class="result-tabs" aria-label="结果视图"><button class="active" data-result-tab="overview">总览</button><button data-result-tab="schedule">排班</button><button data-result-tab="mechanics">机制</button><button data-result-tab="simulation">模拟</button></nav>
 
         <div class="tab-panel active" data-tab-panel="overview">
-          <article class="panel yield-curve-panel"><div class="card-heading"><div><span class="card-kicker">24H TRACE</span><h2>产出曲线</h2></div><label class="curve-picker"><span>资源</span><select id="curveMetric"><option value="lmd_net_after_shards_per_day">龙门币净收入</option><option value="lmd_per_day">赤金贸易收入</option><option value="lmd_shard_cost_per_day">搓玉龙门币消耗</option><option value="exp_per_day">作战经验</option><option value="gold_net_per_day">赤金净流量</option><option value="gold_made_per_day">赤金制造</option><option value="gold_used_per_day">赤金消耗</option><option value="orundum_per_day">合成玉</option><option value="drones_per_day">无人机</option></select></label></div><div id="yieldCurve" class="yield-curve"></div></article>
-          <div class="overview-grid"><article class="panel production-console"><div class="card-heading"><div><span class="card-kicker">FLOW</span><h2>每日吞吐</h2></div><span class="live-pill"><i></i>期望</span></div><div id="productionMonitor" class="production-monitor"></div></article><article class="panel resource-chart"><div class="card-heading"><div><span class="card-kicker">COMPARE</span><h2>资源对比</h2></div></div><div id="barChart" class="bar-chart"></div></article></div>
+          <article class="panel yield-curve-panel"><div class="card-heading"><div><span class="card-kicker">PRODUCTION TRACE</span><h2>产出曲线</h2></div><div id="curveMetric" class="resource-choices" role="group" aria-label="选择曲线资源"></div></div><div id="yieldCurve" class="yield-curve"></div></article>
+          <div class="overview-grid"><article class="panel production-console"><div class="card-heading"><div><span class="card-kicker">FLOW</span><h2>每日吞吐</h2></div><span class="live-pill"><i></i>期望</span></div><div id="productionMonitor" class="production-monitor"></div></article></div>
         </div>
 
         <div class="tab-panel" data-tab-panel="schedule">
@@ -90,9 +90,9 @@
           <div class="room-section-head"><div><span class="card-kicker">ASSIGNMENT</span><h2>设施排班</h2></div><span>全局去重</span></div><div id="rooms" class="team-rooms"></div>
         </div>
 
-        <div class="tab-panel" data-tab-panel="mechanics">
+        <div class="tab-panel" data-tab-panel="mechanics"><p id="mechanismCoverage" class="mechanism-coverage"></p>
           <div class="mechanics-grid"><article class="panel side-card"><div class="side-title"><span class="side-icon gold-icon">Au</span><div><small>INVENTORY</small><h3>赤金流量</h3></div></div><div id="goldMonitor"></div></article><article class="panel side-card"><div class="side-title"><span class="side-icon drone-icon">⚡</span><div><small>DRONE</small><h3>无人机分流</h3></div></div><div id="droneMonitor"></div></article><article class="panel side-card wide"><div class="side-title"><span class="side-icon state-icon">⇄</span><div><small>CROSS ROOM</small><h3>跨房间状态</h3></div></div><div id="crossRoomPanel" class="state-flows"></div></article></div>
-          <article id="moraleAudit" class="panel morale-audit"></article><article id="objectiveComparison" class="panel objective-comparison"></article><details class="panel audit-disclosure"><summary><span>多设施干员分配</span><b>⌄</b></summary><div id="allocationAudit" class="allocation-audit"></div></details><details class="panel audit-disclosure"><summary><span>求解范围与注意事项</span><b>⌄</b></summary><div id="warnings" class="warnings"></div></details>
+          <article id="moraleAudit" class="panel morale-audit"></article><article id="objectiveComparison" class="panel objective-comparison"></article><details class="panel audit-disclosure"><summary><span>多设施干员分配</span><b>⌄</b></summary><div id="allocationAudit" class="allocation-audit"></div></details><details class="panel audit-disclosure"><summary><span>排班提醒</span><b>⌄</b></summary><div id="warnings" class="warnings"></div></details>
         </div>
 
         <div class="tab-panel" data-tab-panel="simulation">
@@ -108,9 +108,9 @@
   </dialog>
   <dialog id="rosterDialog" class="roster-dialog" aria-labelledby="rosterDialogTitle">
     <div class="dialog-head"><div><span class="card-kicker">OPERATOR POOL</span><h2 id="rosterDialogTitle">干员管理 <span><b id="rosterDraftCount">0</b> 人</span></h2></div><button id="closeRosterButton" type="button" class="quiet">取消</button></div>
-    <div class="roster-toolbar"><label class="roster-search"><span>查找干员</span><input id="rosterFilter" type="search" placeholder="输入干员名字" autocomplete="off"></label><label><span>星级</span><select id="rosterRarity"><option value="0">全部星级</option><option value="6">6 星</option><option value="5">5 星</option><option value="4">4 星</option><option value="3">3 星</option><option value="2">2 星</option><option value="1">1 星</option></select></label><label><span>排序</span><select id="rosterSort"><option value="rarity">星级优先</option><option value="name">名称顺序</option></select></label></div>
-    <div class="roster-scroll"><div id="rosterTiers"></div><details class="candidate-pool" open data-drop-phase="-1"><summary>候选干员 <span id="rosterAvailableCount">0</span><small>拖入上方即可加入 · 拖回此处即可移除</small></summary><div id="rosterAvailable" class="tier-pool available-pool"></div></details></div>
-    <div id="rosterInspector" class="roster-inspector"></div>
+    <div class="roster-toolbar"><label class="roster-search"><span>查找干员</span><input id="rosterFilter" type="search" placeholder="输入干员名字" autocomplete="off"></label><label><span>星级</span><select id="rosterRarity"><option value="0">全部星级</option><option value="6">6 星</option><option value="5">5 星</option><option value="4">4 星</option><option value="3">3 星</option><option value="2">2 星</option><option value="1">1 星</option></select></label><label><span>排序</span><select id="rosterSort"><option value="rarity">稀有度</option><option value="elite">练度</option><option value="skills">已解锁基建技能</option><option value="efficiency">基建效率</option><option value="name">名称</option></select></label><label><span>效率设施</span><select id="rosterFacility"><option value="gold">赤金制造</option><option value="exp">经验制造</option><option value="shard">碎片制造</option><option value="trade">赤金贸易</option><option value="orundum">合成玉贸易</option><option value="power">无人机充能</option></select></label><div class="roster-view-switch" role="group" aria-label="干员展示方式"><button type="button" data-roster-view="game" aria-pressed="true">干员卡片</button><button type="button" data-roster-view="tiers" aria-pressed="false">精英分组</button></div></div>
+    <div class="roster-layout"><aside id="rosterProfessions" class="profession-sidebar" aria-label="职业与分支筛选"></aside><div class="roster-scroll"><div id="rosterTiers"></div><details class="candidate-pool" open data-drop-phase="-1"><summary>候选干员 <span id="rosterAvailableCount">0</span><small>拖入上方即可加入 · 拖回此处即可移除</small></summary><div id="rosterAvailable" class="tier-pool available-pool"></div></details></div>
+    </div><div id="rosterInspector" class="roster-inspector"></div>
     <div class="roster-footer"><p id="rosterEditStatus" role="status"></p><button id="clearButton" type="button" class="quiet danger">清空草稿</button><button id="saveButton" type="button" class="primary">保存干员列表</button></div>
   </dialog>
   <div id="operatorPopover" class="operator-popover" role="tooltip" hidden></div>

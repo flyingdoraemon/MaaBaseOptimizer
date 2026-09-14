@@ -86,7 +86,8 @@ def compile_morale(schedules: list[dict], cycle: float, horizon: float, interval
             return room
         # Cached subsets include the complete current cross-facility state.
         signature = (id(room), tuple(sorted(active)), tuple((r.get('room'), tuple(r.get('operators') or [])) for r in all_rooms),
-                     tuple(sorted(op for op in active if morale.get(op, 24) <= 12)))
+                     tuple(sorted((op, int((24-morale.get(op,24)+1e-8)//4), morale.get(op,24)<12) for op in active if prepared.get(op,{}).get('icons',set()) & {'bskill_man_spd_reduce','bskill_man_spd_add&cost'})),
+                     tuple(sorted(op for op in active if morale.get(op,24)<=12)))
         if signature in cache:
             return cache[signature]
         state = room.get('base_state') or {}
@@ -124,6 +125,8 @@ def compile_morale(schedules: list[dict], cycle: float, horizon: float, interval
             if 'bskill_ctrl_cost_bd1&bd2' in icons:
                 context.human_fire += 15 * (int(not low) - int(midpoint > 12))
                 context.perception_information += 10 * (int(low) - int(midpoint <= 12))
+        context.operator_morale = {op: value - (EPS if rates.get(op,0)>0 else 0) for op,value in morale.items()}
+        context.training_operator_ids = [op for r in all_rooms if r.get('key') == 'training' for op in r.get('operators',[]) if op in active]
         evaluated = evaluate_team([prepared[x] for x in ids if x in active], room['key'], catalog, context)
         # Preserve physical assignment signatures for drone routing. The
         # number of active operators is a separate efficiency input.
@@ -189,7 +192,7 @@ def compile_morale(schedules: list[dict], cycle: float, horizon: float, interval
         end = boundaries[pointer] if pointer < len(boundaries) else horizon
         for op, delta in deltas.items():
             value = morale[op]
-            targets = [0, 12] if delta < 0 else [12, 24]
+            targets = [0, 4, 8, 12, 16, 20] if delta < 0 else [4, 8, 12, 16, 20, 24]
             for target in targets:
                 dt = (target - value) / delta * 60 if abs(delta) > EPS else -1
                 if dt > EPS:

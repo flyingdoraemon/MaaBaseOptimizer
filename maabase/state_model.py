@@ -38,7 +38,7 @@ CONTEXT_MODELED_ICONS = frozenset({
     "bskill_tra_limit_diff",
     "bskill_man_spd&limit_felyne", "bskill_man_token_spd1", "bskill_man_token_spd2",
     "bskill_man_spd_variable11", "bskill_man_spd_variable31", "bskill_man_spd_variable21",
-    "bskill_man_spd_mechanist", "bskill_man_spd_reduce",
+    "bskill_man_spd_mechanist", "bskill_man_spd_reduce", "bskill_man_spd_add&cost",
     "bskill_man_spd_add1", "bskill_man_spd_add2", "bskill_man_spd_add3",
     "bskill_man_spd_manu1", "bskill_man_spd_manu2",
     "bskill_man_spd&power1", "bskill_man_spd&power2", "bskill_man_spd&power3",
@@ -53,14 +53,15 @@ CONTEXT_MODELED_ICONS = frozenset({
     "bskill_man_spd_bd7", "bskill_man_spd_bd_dungeon", "bskill_man_spd_bd_n1",
     "bskill_tra_bd_n1", "bskill_tra_bd_n2", "bskill_tra_spd_bd1", "bskill_tra_spd_bd2",
     "bskill_tra_spd_bd_dungeon",
-    "bskill_tra_limit_count", "bskill_tra_flow_gs2", "bskill_tra_flow_gc2",
+    "bskill_tra_limit_count", "bskill_tra_flow_gs2", "bskill_tra_flow_gc2", "bskill_tra_flow_gs1", "bskill_tra_flow_gc1",
     "bskill_tra_flow_durin",
     "bskill_tra_spd&meet1", "bskill_tra_spd&meet", "bskill_tra_par1",
     "trade_ord_spd&par2", "bskill_tra_laterano1", "bskill_tra_lemuen1",
     "bskill_trade_ord_spd_variable", "bskill_tra_limit2spd", "bskill_tra_spd&wt1",
     "bskill_tra_par&per2", "bskill_tra_ord_spd_ext1", "bskill_tra_ord_spd_ext3",
+    "bskill_tra_par&per1", "bskill_tra_ord_spd_ext0", "bskill_tra_ord_spd_ext2",
     "bskill_ord_spd&tag1", "bskill_ord_spd&tag2", "bskill_tra_orchd2",
-    "bskill_pow_drone", "bskill_pow_spd_P", "bskill_power_rec_spd&dorm&lv", "bskill_power_rec_rhine",
+    "bskill_pow_drone", "bskill_pow_spd_P", "bskill_pow_spd_P1", "bskill_power_rec_spd&dorm&lv", "bskill_power_rec_rhine",
     "bskill_power_rec_spd_ext&faction", "bskill_power_rec_spd_ext&tag",
     "bskill_ctrl_t_spd", "bskill_ctrl_p_spd", "bskill_ctrl_cost_felyne",
     "bskill_ctrl_felyne", "bskill_ctrl_aegir", "bskill_ctrl_aegir2",
@@ -118,6 +119,8 @@ class BaseContext:
     shard_recipe: str = "rock"
     elite_staffed_facility_count: int = 0
     sui_staffed_facility_count: int = 0
+    operator_morale: dict[str, float] = field(default_factory=dict)
+    training_operator_ids: list[str] = field(default_factory=list)
     drone_capacity: int = 235
     audit: list[str] = field(default_factory=list)
 
@@ -328,6 +331,22 @@ def _target_matches(skill: dict, product: str) -> bool:
     return not target or not skill.get("targets") or target in skill.get("targets", [])
 
 
+def _morale_consumption(operator: dict, team: list[dict], product: str, context: BaseContext) -> float:
+    from .work_morale import morale_rates
+    room = {"key": product, "operators": [op["id"] for op in team],
+            "names": [op["name"] for op in team],
+            "details": [{"operator": op["name"], "skills": op["skills"]} for op in team]}
+    return morale_rates(room, {"operators": context.control_operator_ids}).get(operator["id"], 1.)
+
+
+def _low_morale_fraction(operator: dict, team: list[dict], product: str, context: BaseContext) -> float:
+    if operator["id"] in context.operator_morale:
+        return float(context.operator_morale[operator["id"]] < 12)
+    rate = _morale_consumption(operator, team, product, context)
+    threshold = 12 / rate if rate > 0 else float('inf')
+    return max(0., context.shift_hours - threshold) / max(context.shift_hours, 1e-9)
+
+
 def _static_capacity_by_operator(team: list[dict], product: str, context: BaseContext) -> dict[str, float]:
     """Return unconditional, positive capacity supplied by each worker.
 
@@ -340,6 +359,9 @@ def _static_capacity_by_operator(team: list[dict], product: str, context: BaseCo
         total = 0.0
         for skill in operator["skills"]:
             if skill.get("room") != "MANUFACTURE" or not _target_matches(skill, product):
+                continue
+            if skill.get("icon") == "bskill_man_spd_add&cost":
+                total += 6 * _low_morale_fraction(operator, team, product, context)
                 continue
             for clause in re.split(r"[，；。]", skill.get("description", "")):
                 if "仓库容量" not in clause or any(marker in clause for marker in ("每有", "每个", "每间", "如果", "若", "当")):
@@ -604,10 +626,11 @@ def room_context_adjustment(team: list[dict], product: str, context: BaseContext
             local_gold_lines += count
             modeled.add("bskill_tra_flow_durin")
             notes.append(f"际崖居民：基建工作的杜林族 {count} 名 → 结算赤金线 +{count}")
-        if "bskill_tra_flow_gc2" in icons:
-            extra_lines = 2 * (context.gold_lines // 2)
+        if icons & {"bskill_tra_flow_gc1", "bskill_tra_flow_gc2"}:
+            threshold = 2 if "bskill_tra_flow_gc2" in icons else 4
+            extra_lines = 2 * (context.gold_lines // threshold)
             local_gold_lines += extra_lines
-            modeled.add("bskill_tra_flow_gc2")
+            modeled.update(icons & {"bskill_tra_flow_gc1", "bskill_tra_flow_gc2"})
             notes.append(f"订单流可视化：{context.gold_lines} 条实际赤金线 → {local_gold_lines} 条结算赤金线")
         if "bskill_tra_flow_gs" in icons:
             value = 5.0 * local_gold_lines
@@ -615,11 +638,12 @@ def room_context_adjustment(team: list[dict], product: str, context: BaseContext
             modeled.add("bskill_tra_flow_gs")
             notes.append(f"赤金生产线 {local_gold_lines} 条 +{value:g}%")
             use_state("gold_lines", "赤金生产线", local_gold_lines, value, f"{local_gold_lines:g} 条 × 5%")
-        if "bskill_tra_flow_gs2" in icons:
-            value = 15.0 * (local_gold_lines // 2)
+        if icons & {"bskill_tra_flow_gs1", "bskill_tra_flow_gs2"}:
+            threshold = 2 if "bskill_tra_flow_gs2" in icons else 4
+            value = 15.0 * (local_gold_lines // threshold)
             delta += value
-            modeled.add("bskill_tra_flow_gs2")
-            notes.append(f"物流规划：{local_gold_lines} 条赤金线，每 2 条 +15% = +{value:g}%")
+            modeled.update(icons & {"bskill_tra_flow_gs1", "bskill_tra_flow_gs2"})
+            notes.append(f"物流规划：{local_gold_lines} 条赤金线，每 {threshold} 条 +15% = +{value:g}%")
         if "bskill_tra_spd&limit_felyne" in icons:
             value = 3.0 * context.catnip
             delta += value
@@ -685,21 +709,22 @@ def room_context_adjustment(team: list[dict], product: str, context: BaseContext
             modeled.add("bskill_tra_lemuen1")
             notes.append(f"相伴：{'与能天使同站' if value else '未与能天使同站'} → +{value:g}%")
         working_ids = set(context.working_operator_ids)
-        if "bskill_tra_par&per2" in icons:
-            count = sum(operator_id in working_ids for operator_id in ("char_4087_ines", "char_113_cqbw"))
+        if icons & {"bskill_tra_par&per1", "bskill_tra_par&per2"}:
+            partners = ("char_4087_ines", "char_113_cqbw") if "bskill_tra_par&per2" in icons else ("char_4087_ines",)
+            count = sum(operator_id in working_ids for operator_id in partners)
             value = 5.0 * count
             delta += value
-            modeled.add("bskill_tra_par&per2")
+            modeled.update(icons & {"bskill_tra_par&per1", "bskill_tra_par&per2"})
             notes.append(f"白手起家：伊内丝/W 工作人数 {count} × 5% = +{value:g}%")
-        if "bskill_tra_ord_spd_ext1" in icons:
-            value = 10.0 if "char_4145_ulpia" in working_ids else 0.0
+        if icons & {"bskill_tra_ord_spd_ext0", "bskill_tra_ord_spd_ext1"}:
+            value = (10.0 if "bskill_tra_ord_spd_ext1" in icons else 5.0) if "char_4145_ulpia" in working_ids else 0.0
             delta += value
-            modeled.add("bskill_tra_ord_spd_ext1")
+            modeled.update(icons & {"bskill_tra_ord_spd_ext0", "bskill_tra_ord_spd_ext1"})
             notes.append(f"对陆接洽：{'乌尔比安在基建工作' if value else '乌尔比安未在基建工作'} → +{value:g}%")
-        if "bskill_tra_ord_spd_ext3" in icons:
-            value = 10.0 if "char_427_vigil" in working_ids else 0.0
+        if icons & {"bskill_tra_ord_spd_ext2", "bskill_tra_ord_spd_ext3"}:
+            value = (10.0 if "bskill_tra_ord_spd_ext3" in icons else 5.0) if "char_427_vigil" in working_ids else 0.0
             delta += value
-            modeled.add("bskill_tra_ord_spd_ext3")
+            modeled.update(icons & {"bskill_tra_ord_spd_ext2", "bskill_tra_ord_spd_ext3"})
             notes.append(f"家族经营：{'伺夜在基建工作' if value else '伺夜未在基建工作'} → +{value:g}%")
         if "bskill_ord_spd&tag1" in icons:
             count = min(10, context.elite_staffed_facility_count)
@@ -868,7 +893,7 @@ def room_context_adjustment(team: list[dict], product: str, context: BaseContext
             notes.append(f"发电站作业平台 {context.platform_power_count} 台 +{value:g}%")
             use_state("platform_power_count", "作业平台", context.platform_power_count, value, f"{context.platform_power_count:g} 台 × {per:g}%")
         capacities = _static_capacity_by_operator(team, product, context)
-        conditional_capacity_fraction = max(0.0, context.shift_hours - 16.0) / max(context.shift_hours, 1e-9)
+        conditional_capacity_fraction = sum(_low_morale_fraction(op, team, product, context) for op in team if "bskill_man_spd_add&cost" in op["icons"])
         if "bskill_man_spd_add&cost" in icons:
             value = 10.0 * conditional_capacity_fraction
             delta += value
@@ -878,8 +903,6 @@ def room_context_adjustment(team: list[dict], product: str, context: BaseContext
             # Bubble explicitly has priority over Red Cloud and evaluates each
             # worker's own positive capacity separately.
             value = sum(capacity if capacity <= 16.0 else capacity * 3.0 for capacity in capacities.values())
-            if "bskill_man_spd_add&cost" in icons:
-                value += 6.0 * conditional_capacity_fraction
             delta += value
             modeled.add("bskill_man_spd_variable31")
             if "bskill_man_spd_variable11" in icons:
@@ -889,8 +912,6 @@ def room_context_adjustment(team: list[dict], product: str, context: BaseContext
         elif "bskill_man_spd_variable11" in icons:
             capacity = sum(capacities.values())
             value = 2.0 * capacity
-            if "bskill_man_spd_add&cost" in icons:
-                value += 12.0 * conditional_capacity_fraction
             delta += value
             modeled.add("bskill_man_spd_variable11")
             notes.append(f"红云仓容转换：静态正仓容 {capacity:g} × 2% = +{value:g}%")
@@ -970,7 +991,10 @@ def room_context_adjustment(team: list[dict], product: str, context: BaseContext
             modeled.add("bskill_man_spd_mechanist")
             notes.append(f"12 小时后生效的班均贡献 +{value:.2f}%")
         if "bskill_man_spd_reduce" in icons:
-            penalty = _morale_gap_average_penalty(context.shift_hours)
+            penalty = sum(5 * min(6, int((24 - context.operator_morale[op["id"]] + 1e-8) // 4))
+                          if op["id"] in context.operator_morale else
+                          _morale_gap_average_penalty(context.shift_hours, _morale_consumption(op, team, product, context))
+                          for op in team if "bskill_man_spd_reduce" in op["icons"])
             delta -= penalty
             modeled.add("bskill_man_spd_reduce")
             notes.append(f"心情落差班均衰减 -{penalty:.2f}%")
@@ -1066,6 +1090,12 @@ def room_context_adjustment(team: list[dict], product: str, context: BaseContext
             delta += value
             modeled.add("bskill_pow_spd_P")
             notes.append(f"愉快的对谈：{'凯尔希在中枢' if value else '凯尔希不在中枢'} → +{value:g}%")
+        if "bskill_pow_spd_P1" in icons:
+            value = 5.0 if "char_4133_logos" in context.training_operator_ids else 0.0
+            delta += value
+            modeled.add("bskill_pow_spd_P1")
+            notes.append(f"咒文共鸣：训练室协助位联动 +{value:g}%")
+            use_state("training_operator_ids", "训练室逻各斯", int(value > 0), value, "逻各斯在训练室协助位时 +5%")
         if "bskill_power_rec_spd&dorm&lv" in icons:
             value = 0.5 * context.dorm_level_sum
             delta += value
@@ -1142,3 +1172,12 @@ def mechanism_coverage(operators: list[dict]) -> dict:
         "exact_percent": round(100.0 * len(exact) / max(1, len(exact) + len(partial)), 1),
         "partial": partial,
     }
+
+
+def catalog_mechanism_coverage(catalog: dict) -> dict:
+    """Audit every reachable buff, including versions replaced by promotion."""
+    operators = []
+    for oid, op in catalog["operators"].items():
+        buff_ids = {level["buff"] for slot in op["slots"] for level in slot}
+        operators.append({"id": oid, "name": op["name"], "skills": [catalog["buffs"][bid] for bid in sorted(buff_ids)]})
+    return mechanism_coverage(operators)

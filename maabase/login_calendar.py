@@ -21,28 +21,33 @@ def apply_night_calendar(rotation: dict) -> dict:
                                   "clock_origin_hour": 0, "handover_policy": "login_only"}
     if not quiet:
         return rotation
-    # Builders use a daily A/B cycle starting at zero. Shift its origin to
-    # 06:00 and split only the display interval crossing midnight. The offset
-    # explicitly preserves the incoming night's elapsed work and warm-up.
-    rotation["cycle_hours"] = rotation["natural_cycle_hours"] = 24.0
+    period = float(rotation.get("natural_cycle_hours") or rotation["cycle_hours"])
+    horizon = float(rotation["cycle_hours"])
+    rotation["login_calendar"]["login_hours"] = login_hours(interval, horizon)
+    # Phase-shift the full common period to 06:00. Never wrap a 36-hour
+    # assignment at midnight or repeat an incomplete display window.
     for row in rotation["rooms"]:
+        source = [event for event in row["events"] if event["start"] < period]
         events = []
-        for event in row["events"]:
-            start, end = event["start"] + 6, event["end"] + 6
-            for left, right, offset in ((start, min(end, 24), 0), (max(start, 24), end, 24)):
+        for repeat in range(-1, math.ceil(horizon / period) + 1):
+            for event in source:
+                start = event["start"] + 6 + repeat * period
+                end = min(event["end"], period) + 6 + repeat * period
+                left, right = max(0., start), min(horizon, end)
                 if right <= left:
                     continue
                 extra = left - start
                 phases = [{**profile, "phases": [
-                    {**phase, "start": max(left, phase["start"] + 6) - offset,
-                     "end": min(right, phase["end"] + 6) - offset}
+                    {**phase, "start": max(left, phase["start"] + 6 + repeat * period),
+                     "end": min(right, phase["end"] + 6 + repeat * period)}
                     for phase in profile.get("phases", [])
-                    if min(right, phase["end"] + 6) > max(left, phase["start"] + 6)
+                    if min(right, phase["end"] + 6 + repeat * period) > max(left, phase["start"] + 6 + repeat * period)
                 ]} for profile in event.get("time_profiles", [])]
-                events.append({**event, "start": left - offset, "end": right - offset,
+                events.append({**event, "start": left, "end": right,
                                "elapsed_offset_hours": extra, "time_profiles": phases,
+                               "scheduled_work_hours": event.get("scheduled_work_hours", end - start),
                                "continuation": extra > 0})
-        row["events"] = sorted(events, key=lambda e: e["start"])
+        row["events"] = sorted(events, key=lambda event: event["start"])
     changes = {}
     for row in rotation["rooms"]:
         for event in row["events"]:

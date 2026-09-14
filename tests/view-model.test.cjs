@@ -43,3 +43,14 @@ test('Fiammetta option follows the actual operator id after adding and removing'
   assert.equal(view.fiammettaOwned([...original,{id:'char_300_phenxi',elite:0}]),true);
   assert.equal(view.fiammettaOwned([{id:'unrelated',name:'菲亚梅塔'}]),false);
 });
+test('training, unlocked skills and facility efficiency use the selected promotion and level',()=>{
+  const definitions=[{id:'a',name:'甲',rarity:6,previews:[{elite:0,level:1,skills:[1],efficiency:{gold:5,power:20}},{elite:1,level:1,skills:[1,2],efficiency:{gold:35,power:20}}]},
+    {id:'b',name:'乙',rarity:4,previews:[{elite:0,level:1,skills:[1],efficiency:{gold:20,power:5}}]}];
+  const byId=new Map(definitions.map(op=>[op.id,op]));
+  const owned=[{id:'a',name:'甲',elite:0,level:50},{id:'b',name:'乙',elite:1,level:60}];
+  assert.deepEqual(view.sortOperators(owned,byId,'elite').map(op=>op.id),['b','a']);
+  assert.deepEqual(view.sortOperators(owned,byId,'efficiency','gold').map(op=>op.id),['b','a']);
+  assert.deepEqual(view.sortOperators(owned,byId,'efficiency','power').map(op=>op.id),['a','b']);
+  assert.equal(view.operatorPreview(owned[0],byId).skills.length,1);
+  assert.equal(view.operatorPreview({...owned[0],elite:1,level:1},byId).skills.length,2);
+});

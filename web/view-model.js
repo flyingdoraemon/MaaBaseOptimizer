@@ -15,10 +15,15 @@
       level: previous?.elite === phase ? Math.min(previous.level || 1, maxLevel(item.rarity, phase)) : 1};
     return previous ? roster.map(value => value.id === id ? op : value) : [...roster, op];
   }
-  function sortOperators(operators, byId, mode='rarity') {
-    return [...operators].sort((a,b) => {
-      const rarity = (byId.get(b.id)?.rarity || b.rarity || 0) - (byId.get(a.id)?.rarity || a.rarity || 0);
-      return (mode === 'name' ? 0 : mode === 'elite' ? (b.elite || 0) - (a.elite || 0) || rarity : rarity) || names.compare(a.name,b.name);
+  function operatorPreview(op, byId) {
+    const catalog=byId.get(op.id)||op;
+    return [...(catalog.previews||[])].reverse().find(stage=>stage.elite<(op.elite||0)||(stage.elite===(op.elite||0)&&stage.level<=(op.level||1)))||{skills:[],efficiency:{}};
+  }
+  function sortOperators(operators, byId, mode='rarity', facility='gold') {
+    const score=op=>mode==='elite'?(op.elite||0)*100+(op.level||1):mode==='skills'?operatorPreview(op,byId).skills.length:mode==='efficiency'?(operatorPreview(op,byId).efficiency[facility]||0):0;
+    return [...operators].sort((a,b)=>{
+      const rarity=(byId.get(b.id)?.rarity||b.rarity||0)-(byId.get(a.id)?.rarity||a.rarity||0);
+      return (mode==='name'?0:score(b)-score(a)||rarity)||names.compare(a.name,b.name);
     });
   }
   function income(metrics = {}) {
@@ -30,7 +35,7 @@
     if (width < 44 + count * 38) return 'compact';
     return width < 44 + count * 96 ? 'portraits' : 'full';
   }
-  const api = {phaseNames, maxElite, maxLevel, moveOperator, sortOperators, income, segmentMode, fiammettaOwned};
+  const api = {operatorPreview, phaseNames, maxElite, maxLevel, moveOperator, sortOperators, income, segmentMode, fiammettaOwned};
   root.BaseView = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

@@ -28,7 +28,7 @@ def update(output: Path, revision: str = 'master', maa_path: Path | None = None)
     hashes = {}
     with tempfile.TemporaryDirectory(prefix='maabase-catalog-') as temp:
         directory = Path(temp)
-        for name in ('building_data.json', 'character_table.json'):
+        for name in ('building_data.json', 'character_table.json', 'uniequip_table.json'):
             raw = fetch(f'https://raw.githubusercontent.com/{GAME_REPO}/{sha}/zh_CN/gamedata/excel/{name}')
             json.loads(raw)
             hashes[name] = hashlib.sha256(raw).hexdigest()

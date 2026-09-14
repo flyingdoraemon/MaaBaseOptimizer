@@ -11,6 +11,7 @@ from typing import Any
 from .model import active_skills, generate_candidates, prepare_operators
 from .morale import analyze_morale, choose_dorm_helper
 from .scheduler import DRONE_CAPACITY, build_rotation, build_staggered_production_curve
+from .state_model import catalog_mechanism_coverage
 from .valuation import candidate_daily_value, metrics_daily_value, metrics_layout_score, public_valuation, resource_values
 from .state_model import (
     ABYSSAL_HUNTER_IDS,
@@ -360,20 +361,6 @@ def _warnings(selected: dict[str, list[dict]], metrics: dict) -> list[str]:
             f"即使把本班全部无人机投向赤金，预计赤金净流量仍为 {drone_balance['projected_gold_net_per_day']:+.1f}/日，"
             f"无法达到用户允许的 {drone_balance['target_gold_net_per_day']:+.1f}/日；本班已采用最接近目标的分配。"
         )
-    net = metrics["gold_net_per_day"]
-    production_net = metrics.get("gold_production_net_per_day", net)
-    external = metrics.get("gold_external_per_day", 0)
-    if production_net < -5 and external > 0:
-        warnings.append(
-            f"制造站与贸易站本身每天相差 {production_net:.1f} 根赤金；计入外部 +{external:.1f}/日后，"
-            f"库存总变化为 {net:+.1f}/日。赤金是中间品，负的制造净流量不等于方案低效。"
-        )
-    elif net < -5:
-        days = metrics.get("gold_inventory_days")
-        suffix = f"；按当前库存可维持约 {days:.1f} 天" if days is not None and days > 0 else ""
-        warnings.append(f"当前方案每天预计净消耗 {-net:.1f} 根赤金{suffix}。这是库存流量提示，不会被直接判为错误方案。")
-    elif net > 8:
-        warnings.append(f"计入外部来源后每天预计净增加 {net:.1f} 根赤金；这是库存流量提示，可按实际积压情况调整制造站配方。")
     unresolved = sorted({item for values in selected.values() for c in values for item in c.get("unresolved", [])})
     if unresolved:
         warnings.append("以下特殊技能暂按保守值处理：" + "、".join(unresolved[:8]) + ("……" if len(unresolved) > 8 else ""))
@@ -414,7 +401,7 @@ def _room_weighted_selection(rotation: dict) -> dict[str, list[dict]]:
                 continue
             room_b = rooms_b[index]
             room_name = str(room_a.get("room") or "")
-            pair_hours = durations.get(room_name) or {"A": 1.0, "B": 1.0}
+            pair_hours = durations.get(room_name) or rotation.get("team_work_hours") or {"A": 1.0, "B": 1.0}
             total = max(1e-9, float(pair_hours["A"]) + float(pair_hours["B"]))
             wa, wb = float(pair_hours["A"]) / total, float(pair_hours["B"]) / total
             blended = {
@@ -562,7 +549,7 @@ def _control_row(team: list[dict], context: BaseContext) -> dict | None:
 
 
 def _support_rows(
-    operators: list[dict], used: set[str], shift_hours: float, excluded_ids: set[str] | None = None,
+    operators: list[dict], used: set[str], shift_hours: float, excluded_ids: set[str] | None = None, training_ids: list[str] | None = None,
 ) -> list[dict]:
     """Choose reception/office workers without reusing production operators."""
     excluded_ids = excluded_ids or set()
@@ -579,6 +566,8 @@ def _support_rows(
             score -= 20.0 if shift_hours <= 8 else 100.0
         return score
 
+    training = [operator for operator in available if operator["id"] in (training_ids or [])]
+    available = [operator for operator in available if operator not in training]
     meeting = sorted(available, key=lambda operator: skill_score(operator, "MEETING"), reverse=True)[:2]
     meeting_ids = {operator["id"] for operator in meeting}
     office_pool = [operator for operator in available if operator["id"] not in meeting_ids]
@@ -614,6 +603,7 @@ def _support_rows(
     return [item for item in (
         row("reception", "会客室", meeting, "MEETING"),
         row("office", "人力办公室", office, "HIRE"),
+        row("training", "训练室协助位", training, "TRAINING"),
     ) if item]
 
 
@@ -784,20 +774,18 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     gold_inventory = max(0.0, min(10000000.0, float(payload.get("gold_inventory", 0))))
     shard_inventory = max(0.0, min(10000000.0, float(payload.get("shard_inventory", 0))))
     coverage = mechanism_coverage(operators)
-    catalog_operators = prepare_operators(
-        [{"id": op_id, "elite": 2, "level": 90} for op_id in catalog["operators"]],
-        catalog,
-    )
-    catalog_coverage = mechanism_coverage(catalog_operators)
+    catalog_coverage = catalog_mechanism_coverage(catalog)
     # Compare production-distinct control-center states against the actual
     # downstream room solution.  On very large synthetic catalogs, retain the
     # former single-state path to keep regression runs laptop-friendly.
-    control_pool = [operator for operator in operators if operator["id"] not in reusable_ids]
+    training_ids = [op["id"] for op in operators if op["id"] == "char_4133_logos"] if any("bskill_pow_spd_P1" in op["icons"] for op in operators) else []
+    base_context.training_operator_ids = training_ids
+    control_pool = [operator for operator in operators if operator["id"] not in reusable_ids and operator["id"] not in training_ids]
     control_options = select_control_options(control_pool, base_context, 12 if len(operators) <= 180 else 2)
     best_plan: tuple[float, list[dict], BaseContext, dict, str, dict] | None = None
     for control_team_option, context_option in control_options:
         control_ids = {operator["id"] for operator in control_team_option}
-        production_operators = [operator for operator in operators if operator["id"] not in control_ids]
+        production_operators = [operator for operator in operators if operator["id"] not in control_ids and operator["id"] not in training_ids]
         power_seed = generate_candidates(production_operators, "power", catalog, keep, context_option)[:3]
         context_option.platform_power_count = platform_count(power_seed)
         if context_option.platform_power_count:
@@ -870,7 +858,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 op["id"] for op in assigned_operators if op.get("team_id") == "sees"
             })
             if any(op.get("team_id") == "sees" for op in operators):
-                support_ids = {id for row in _support_rows(operators, assigned_ids, model_shift_hours, reusable_ids)
+                support_ids = {id for row in _support_rows(operators, assigned_ids, model_shift_hours, reusable_ids, training_ids)
                                for id in row.get("operators", [])}
                 sees_operator_ids = sorted(set(sees_operator_ids) | {
                     id for id in support_ids if catalog["operators"].get(id, {}).get("team_id") == "sees"
@@ -945,7 +933,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     control_row = _control_row(control_team, context)
     occupied = {operator for values in selected.values() for room in values for operator in room.get("operators", [])}
     occupied.update(operator["id"] for operator in control_team)
-    auxiliary_rows = _support_rows(operators, occupied, base_context.shift_hours, reusable_ids)
+    auxiliary_rows = _support_rows(operators, occupied, base_context.shift_hours, reusable_ids, training_ids)
     result = {
         "solver": solver,
         "search_audit": {
@@ -1022,7 +1010,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     if catalog_coverage["partial_count"]:
         result["warnings"].append(
             f"当前 Box 已解锁技能覆盖 {coverage['exact_count']}/{coverage['total_relevant']}；"
-            f"全干员满练目录覆盖 {catalog_coverage['exact_count']}/{catalog_coverage['total_relevant']} "
+            f"全干员各解锁阶段目录覆盖 {catalog_coverage['exact_count']}/{catalog_coverage['total_relevant']} "
             f"（{catalog_coverage['exact_percent']}%）。目录剩余机制会继续显示为未覆盖，不能外推为全游戏 100%。"
         )
     if payload.get("include_rotation") and not payload.get("_rotation_internal"):
@@ -1079,7 +1067,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 fiammetta=result["fiammetta"],
                 objective_mode=objective_mode,
             )
-            if result["rotation"].get("schedule_mode") == "staggered" or base_context.collection_interval_hours < 8:
+            if result["rotation"].get("schedule_mode") != "fixed":
                 weighted_selected = _room_weighted_selection(result["rotation"])
                 weighted_metrics = _metrics(
                     weighted_selected, catalog, drone_target, external_gold_per_day,
@@ -1087,7 +1075,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                     base_context.collection_interval_hours, gold_net_target_per_day,
                 )
                 curve = build_staggered_production_curve(
-                    result["rotation"], catalog["constants"], drone_target=drone_target,
+                    result["rotation"], catalog["constants"], catalog=catalog, drone_target=drone_target,
                     external_gold_per_day=external_gold_per_day,
                     gold_net_target_per_day=gold_net_target_per_day,
                 )
@@ -1098,7 +1086,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                     "shards_made_per_day", "shards_used_per_day", "lmd_shard_cost_per_day",
                 ):
                     if key in final_curve:
-                        weighted_metrics[key] = round(float(final_curve[key]), 2)
+                        weighted_metrics[key] = round(float(final_curve[key]) * 24 / curve["hours"], 2)
                 weighted_metrics["gold_production_net_per_day"] = round(
                     float(weighted_metrics.get("gold_made_per_day", 0))
                     - float(weighted_metrics.get("gold_used_per_day", 0)), 2,
@@ -1114,6 +1102,11 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                     float(weighted_metrics.get("lmd_per_day", 0))
                     - float(weighted_metrics.get("lmd_shard_cost_per_day", 0)), 2,
                 )
+                days = curve["hours"] / 24
+                weighted_metrics["drones_recovery_potential_per_day"] = round(curve["drone_recovered"] / days, 2)
+                weighted_metrics["drone_overflow_lost_per_day"] = round(curve["drone_overflow"] / days, 2)
+                weighted_metrics["drones_per_day"] = round((curve["drone_recovered"] - curve["drone_overflow"]) / days, 2)
+                weighted_metrics["power_bonus"] = round((curve["drone_recovered"] / days / 240 - 1) * 100, 2)
                 drone_summary = curve.get("drone_summary") or {}
                 dynamic_allocations = drone_summary.get("allocations") or []
                 dynamic_deltas = drone_summary.get("deltas") or {}

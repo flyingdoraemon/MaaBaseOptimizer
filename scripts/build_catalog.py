@@ -26,6 +26,9 @@ def build(building_path: Path, character_path: Path, maa_path: Path) -> dict:
     characters = json.loads(character_path.read_text(encoding="utf-8"))
     maa = json.loads(maa_path.read_text(encoding="utf-8"))
 
+    module_path = character_path.with_name("uniequip_table.json")
+    sub_professions = json.loads(module_path.read_text(encoding="utf-8")).get("subProfDict", {}) if module_path.exists() else {}
+
     buffs = {}
     for buff_id, raw in building["buffs"].items():
         buffs[buff_id] = {
@@ -69,6 +72,9 @@ def build(building_path: Path, character_path: Path, maa_path: Path) -> dict:
                 # Keep affiliation metadata in the calculation catalog.  Team,
                 # group and nation membership are data, not operator-specific
                 # formula branches, and drive many cross-room RIIC skills.
+                "profession": char.get("profession"),
+                "branch": char.get("subProfessionId"),
+                "branch_name": sub_professions.get(char.get("subProfessionId"), {}).get("subProfessionName", char.get("subProfessionId")),
                 "nation_id": char.get("nationId"),
                 "group_id": char.get("groupId"),
                 "team_id": char.get("teamId"),

@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from maabase.mechanics import mechanic_is_partial
 from maabase.model import prepare_operators
-from maabase.state_model import CONTEXT_MODELED_ICONS, mechanism_coverage
+from maabase.state_model import CONTEXT_MODELED_ICONS, mechanism_coverage, catalog_mechanism_coverage
 
 
 ROOM_MAP = {"MANUFACTURE": "Mfg", "TRADING": "Trade", "POWER": "Power", "CONTROL": "Control"}
@@ -67,7 +67,7 @@ def audit(catalog: dict) -> dict:
     ]
 
     roster = [{"id": operator_id, "elite": 2, "level": 90} for operator_id in catalog["operators"]]
-    coverage = mechanism_coverage(prepare_operators(roster, catalog))
+    coverage = catalog_mechanism_coverage(catalog)
     return {
         "operators": len(catalog["operators"]),
         "buffs": len(catalog["buffs"]),

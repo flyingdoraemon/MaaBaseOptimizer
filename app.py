@@ -25,9 +25,12 @@ from maabase.skland import SklandError, create_scan, credential_from_scan_code, 
 
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
+from maabase.operator_catalog import operator_cards
+
 CATALOG = json.loads((ROOT / "data" / "catalog.json").read_text(encoding="utf-8"))
+OPERATOR_CARDS = operator_cards(CATALOG)
 ROSTER_PATH = ROOT / "data" / "user_roster.json"
-APP_REVISION = "2026.09.14-roster-net-income-v15"
+APP_REVISION = "2026.09.14-multiday-cards-v16"
 SCAN_SESSIONS: dict[str, dict] = {}
 SCAN_LOCK = threading.Lock()
 
@@ -116,11 +119,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path == "/api/operators":
-            operators = [
-                {"id": op_id, "name": op["name"], "rarity": op["rarity"]}
-                for op_id, op in CATALOG["operators"].items()
-            ]
-            operators.sort(key=lambda x: (-x["rarity"], x["name"]))
+            operators = OPERATOR_CARDS
             self._json(200, {
                 "operators": operators,
                 "count": len(operators),
