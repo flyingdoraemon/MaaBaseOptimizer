@@ -59,8 +59,11 @@ def _draw_order(rng: random.Random, distribution: list[dict]) -> dict:
 
 def _schedules(payload: dict) -> tuple[list[dict], float]:
     rotation = payload.get("rotation") or {}
+    # A common period of independent room cycles can exceed the displayed
+    # week (e.g. 32h, 40h and 48h repeat together after 480h). The simulation
+    # horizon is bounded separately; never cap or reject that repeat period.
     cycle = _number(rotation.get("natural_cycle_hours") or rotation.get("cycle_hours") or 24,
-                    "轮班周期", 0.01, 168) * 60
+                    "轮班周期", 0.01) * 60
     schedules = []
     if rotation:
         sources = {(label, room["room"]): room for label, team in rotation.get("teams", {}).items()

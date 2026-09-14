@@ -25,8 +25,9 @@ def _annotate_control(team: dict) -> None:
 
 def _pairs(options: dict, collection: float, maximum: float) -> list[tuple[float, float]]:
     pairs = [(a, b) for a in options["A"] for b in options["B"]]
-    # Calendar-aligned 1/2/3-day cycles allow long shifts while preserving
-    # the same legal login times on every repetition.
+    # Only the overnight quiet window requires a calendar-aligned cycle.
+    # With a uniform login interval, 24/8, 32/8 and 32/32 are all legal even
+    # though their complete cycles are not multiples of a day.
     if collection < 8:
         nodes = login_hours(collection, 78)
         pairs = [(a, b) for a in (hour - 6 for hour in nodes if hour > 6)
@@ -38,8 +39,7 @@ def _pairs(options: dict, collection: float, maximum: float) -> list[tuple[float
             # handovers legal; continuous replay accounts for fatigue.
             fallback = [(hour - 6, 30 - hour) for hour in nodes if 6 < hour < 24]
             return sorted(fallback, key=lambda pair: (max(pair), abs(pair[0] - pair[1])))
-    periodic = [(a, b) for a, b in pairs if a + b in (24., 48., 72.)]
-    return periodic or pairs
+    return pairs
 
 
 def _all_rooms(team: dict) -> list[dict]:
@@ -179,8 +179,7 @@ def _choose_durations(
         cycle = a_hours + b_hours
         weighted = (scores["A"] * a_hours + scores["B"] * b_hours) / cycle
         # Equal yield: prefer fewer handovers and longer continuous work.
-        tie = cycle / 1_000_000.0
-        candidate = (weighted + tie, cycle, a_hours, b_hours)
+        candidate = (round(weighted, 9), cycle, a_hours, b_hours)
         if best is None or candidate > best:
             best = candidate
     if best is None:
@@ -236,7 +235,7 @@ def _choose_room_durations(
         for label, team in teams.items()
     }
     scores = {"A": _room_score(room_a, objective_mode), "B": _room_score(room_b, objective_mode)}
-    best: tuple[float, float, float, float, float] | None = None
+    best: tuple[float, float, float, float] | None = None
     best_audits: tuple[dict, dict] | None = None
     pairs = _pairs(options, collection, maximum)
     for a_hours, b_hours in pairs:
@@ -248,12 +247,12 @@ def _choose_room_durations(
             continue
         cycle = a_hours + b_hours
         weighted = (scores["A"] * a_hours + scores["B"] * b_hours) / cycle
-        # Real output dominates; ties prefer fewer handovers.
+        # Ignore arithmetic noise when comparing identical yields. Support
+        # rooms have no resource score, so keep them until their morale limit.
         candidate = (
-            weighted,
-            cycle / 100_000.0,
-            cycle / 10_000_000.0,
-            -abs(a_hours - b_hours) / 100_000_000.0,
+            round(weighted, 9),
+            cycle,
+            -abs(a_hours - b_hours),
             a_hours,
         )
         if best is None or candidate > best:

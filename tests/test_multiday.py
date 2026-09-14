@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import unittest
-from maabase.scheduler import build_rotation, build_staggered_production_curve
+from maabase.scheduler import build_rotation, build_staggered_production_curve, _choose_room_durations
 from maabase.simulator import _schedules, _source, simulate
 from maabase.state_model import BaseContext, catalog_mechanism_coverage
 from maabase.model import evaluate_team, prepare_operators
@@ -21,6 +21,58 @@ def plan(label, first):
 
 
 class MultidayTests(unittest.TestCase):
+    def test_eight_hour_logins_allow_non_daily_cycles(self):
+        # A consumes 0.9 mood/h (24h safe); B consumes 0.65 (32h safe).
+        a=room('shards','a',2)
+        b=room('shards','b',1)
+        a['details'][0]['skills'][0]['description']='自身心情每小时消耗-0.1'
+        b['details'][0]['skills'][0]['description']='自身心情每小时消耗-0.35'
+        rotation=build_rotation({'rooms':[a],'metrics':{}},{'rooms':[b],'metrics':{}},36,
+                                schedule_mode='staggered',collection_interval_hours=8,max_work_hours=36)
+        self.assertEqual(rotation['room_work_hours']['shards'],{'A':24,'B':8})
+        self.assertEqual(rotation['natural_cycle_hours'],32)
+        self.assertEqual(rotation['cycle_hours'],96)
+        self.assertEqual(rotation['display_hours'],72)
+        self.assertTrue(all(e['time']%8==0 for e in rotation['handover_events']))
+        self.assertEqual([(e['start'],e['end']) for e in rotation['rooms'][0]['events'][:4]],
+                         [(0,24),(24,32),(32,56),(56,64)])
+        curve=build_staggered_production_curve(rotation,CATALOG['constants'],drone_target='none',
+                                               external_gold_per_day=0,gold_net_target_per_day=0)
+        self.assertAlmostEqual(curve['points'][-1]['cumulative']['gold_made_per_day']/(96/24),35)
+
+    def test_eight_hour_logins_keep_32_hour_shifts_and_equal_yield_ties(self):
+        durations,_=_choose_room_durations(room('factory','a',2),room('factory','b',1),
+                                            8,1,36,'layout_output',None)
+        self.assertEqual(durations,{'A':32,'B':8})
+        durations,_=_choose_room_durations(room('factory','a',1.17),room('factory','b',1.17),
+                                            8,1,36,'layout_output',None)
+        self.assertEqual(durations,{'A':32,'B':32})
+
+    def test_auxiliary_rooms_prioritize_fewer_handovers_until_morale_limit(self):
+        control={'operators':list('12345')}
+        for key in ('reception','office'):
+            with self.subTest(key=key):
+                a={**room(key,'a',2),'key':key,'details':[],'control_room':control}
+                b={**room(key,'b',1),'key':key,'details':[],'control_room':control}
+                durations,audit=_choose_room_durations(a,b,8,1,36,'layout_output',None)
+                self.assertEqual(durations,{'A':24,'B':24})
+                self.assertEqual(audit['options']['A'],[8,16,24])
+
+    def test_full_common_period_can_exceed_a_week_without_restarting_rooms(self):
+        a,b={'rooms':[],'metrics':{}},{'rooms':[],'metrics':{}}
+        for name,consumption in [('short',.9),('long',.65),('equal',.75)]:
+            for team,label,multiplier in [(a,'a',2 if name!='equal' else 1),(b,'b',1)]:
+                candidate=room(name,label+name,multiplier)
+                candidate['details'][0]['skills'][0]['description']=f'自身心情每小时消耗-{1-consumption}'
+                team['rooms'].append(candidate)
+        rotation=build_rotation(a,b,36,schedule_mode='staggered',collection_interval_hours=8,max_work_hours=36)
+        self.assertEqual(rotation['natural_cycle_hours'],480)
+        self.assertEqual(rotation['display_hours'],72)
+        schedules,cycle=_schedules({'rotation':rotation})
+        short=next(row for row in schedules if row['name']=='short')
+        self.assertEqual(_source(short,192*60,cycle)[0]['operators'],['ashort'])
+        self.assertEqual(_source(short,(480+192)*60,cycle)[0]['operators'],['ashort'])
+
     def test_36_hour_shift_and_independent_common_period(self):
         rotation=build_rotation(plan('a',2),plan('b',1),36,schedule_mode='staggered',collection_interval_hours=2,max_work_hours=36)
         self.assertEqual(rotation['room_work_hours']['long'],{'A':36,'B':12})

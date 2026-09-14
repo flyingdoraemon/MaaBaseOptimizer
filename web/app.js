@@ -66,8 +66,13 @@ function eliteIcon(phase, className="elite-icon") {
 const popoverBodies=new Map();
 let popoverSerial=0;
 function popoverData(html){const id=String(++popoverSerial);popoverBodies.set(id,html);return `data-popover="${id}"`;}
-function operatorInfo(id,name,profile,skills=[]) {
-  return `<section class="operator-info"><div class="popover-heading">${operatorAvatar(id,name)}<div><strong>${escapeHtml(name)}</strong><small>${BaseView.phaseNames[+profile?.elite||0]} · 等级 ${+profile?.level||1}</small></div>${eliteIcon(profile?.elite)}</div><div class="skill-icon-strip">${skills.map(skill=>skillIcon(skill.icon,skill.name)).join('')}</div>${skills.length?`<details class="skill-description-toggle"><summary>展示技能详情</summary>${skills.map(skill=>`<div class="popover-skill">${skillIcon(skill.icon,skill.name)}<div><b>${escapeHtml(skill.name)}</b><small>${BaseView.phaseNames[+skill.unlock?.phase||0]} · 等级 ${skill.unlock?.level||1} 解锁</small><p>${escapeHtml(skill.description||'暂无技能说明')}</p></div></div>`).join('')}</details>`:'<p class="side-note">该设施没有已解锁技能</p>'}</section>`;
+function operatorInfo(id,name,profile,skills=[],grouped=false) {
+  const descriptions=skills.map(skill=>`<div class="popover-skill">${skillIcon(skill.icon,skill.name)}<div><b>${escapeHtml(skill.name)}</b><small>${BaseView.phaseNames[+skill.unlock?.phase||0]} · 等级 ${skill.unlock?.level||1} 解锁</small><p>${escapeHtml(skill.description||'暂无技能说明')}</p></div></div>`).join('');
+  const detail=grouped?`<div class="team-skill-descriptions" hidden>${descriptions}</div>`:`<details class="skill-description-toggle"><summary>展示技能详情</summary>${descriptions}</details>`;
+  return `<section class="operator-info"><div class="popover-heading">${operatorAvatar(id,name)}<div><strong>${escapeHtml(name)}</strong><small>${BaseView.phaseNames[+profile?.elite||0]} · 等级 ${+profile?.level||1}</small></div>${eliteIcon(profile?.elite)}</div><div class="skill-icon-strip">${skills.map(skill=>skillIcon(skill.icon,skill.name)).join('')}</div>${skills.length?detail:'<p class="side-note">该设施没有已解锁技能</p>'}</section>`;
+}
+function teamOperatorInfo(event) {
+  return `<button type="button" class="team-skills-toggle" data-toggle-team-skills aria-expanded="false">展示全组技能（${event.names.length} 人）</button>${event.names.map((name,index)=>operatorInfo(event.operators[index],name,event.operator_profiles?.[index],(event.details||[]).find(item=>item.operator===name||item.operator===event.operators[index])?.skills||[],true)).join('')}`;
 }
 function operatorBadge(id,name,profile,className="operator-avatar",skills=[]) {
   return `<button type="button" class="operator-badge" ${popoverData(operatorInfo(id,name,profile,skills))} aria-label="${escapeHtml(name)}，${BaseView.phaseNames[+profile?.elite||0]}，查看基建技能">${operatorAvatar(id,name,className)}${eliteIcon(profile?.elite,'badge-elite')}<b>${escapeHtml(name)}</b></button>`;
@@ -423,10 +428,10 @@ function renderRotation(rotation) {
   const rows=(rotation.rooms||[]).map(room=>`<div class="timeline-row room-timeline-row"><strong title="${escapeHtml(room.room)}">${escapeHtml(room.room)}</strong><div class="timeline-lane">${collectionLines}${droneEvents.flatMap(event=>(event.targets||[]).filter(target=>String(target.target||'').split('：')[0]===room.room).map(target=>`<button type="button" class="timeline-drone" style="left:${Math.min(99,event.minute/60/cycle*100)}%" ${popoverData(droneEventInfo(event,target))} aria-label="${hourLabel(event.minute/60)}，投入无人机 ${target.drones} 架">⚡</button>`)).join('')}${room.events.filter(event=>event.start<cycle).map(event=>{
     const left=event.start/cycle*100, width=(Math.min(cycle,event.end)-event.start)/cycle*100;
     const time=`${hourLabel(event.start)}–${hourLabel(event.end)}`;
-    const detail=`<div class="segment-popover-title"><b>${escapeHtml(room.room)} · ${event.team} 班</b><span>${time}${event.continuation?' · 延续前一日夜班':''}</span><small>实际在岗 ${event.scheduled_work_hours}h · 最低结束心情 ${event.morale_min_end??'—'}</small></div>${event.names.map((name,index)=>operatorInfo(event.operators[index],name,event.operator_profiles?.[index],(event.details||[]).find(item=>item.operator===name||item.operator===event.operators[index])?.skills||[])).join('')}`;
+    const detail=`<div class="segment-popover-title"><b>${escapeHtml(room.room)} · ${event.team} 班</b><span>${time}${event.continuation?' · 延续前一日夜班':''}</span><small>实际在岗 ${event.scheduled_work_hours}h · 最低结束心情 ${event.morale_min_end??'—'}</small></div>${teamOperatorInfo(event)}`;
     return `<button type="button" class="timeline-event room-event work-${event.team.toLowerCase()} segment-compact" data-count="${event.names.length}" style="left:${left}%;width:${width}%" ${popoverData(detail)} aria-label="${escapeHtml(`${room.room}，${time}，${event.team} 班，${event.names.join('、')}，查看名单与技能`)}"><span class="room-team">${event.team}</span><span class="segment-count">${event.names.length}人</span><span class="operator-chips">${event.names.map((name,index)=>`<span class="timeline-person">${operatorAvatar(event.operators[index],name,'timeline-avatar')}${eliteIcon(event.operator_profiles?.[index]?.elite,'timeline-elite')}<b>${escapeHtml(name)}</b></span>`).join('')}</span></button>`;
   }).join('')}</div></div>`).join('');
-  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>设施 / 班组</strong><div>${ticks}</div></div>${rows}<p class="timeline-note">停留片刻查看名单，点击固定详情；点击空白处关闭。时间轴从第一天零点开始。</p>`;
+  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>设施 / 班组</strong><div>${ticks}</div></div>${rows}<p class="timeline-note">停留片刻查看名单，移入浮窗可展开全组技能，移开后自动关闭。时间轴从第一天零点开始。</p>`;
   requestAnimationFrame(fitTimelineSegments);
 }
 
@@ -571,19 +576,19 @@ function renderSimulation(data) {
 
 window.addEventListener("resize",()=>Object.values(state.charts).forEach(chart=>chart?.resize()));
 
-let popoverTarget=null, popoverPinned=false, popoverTimer=null, popoverOpenTimer=null;
+let popoverTarget=null, popoverTimer=null, popoverOpenTimer=null;
 function hideOperatorPopover() {
   clearTimeout(popoverOpenTimer);
   clearTimeout(popoverTimer);
   if(popoverTarget)popoverTarget.removeAttribute('aria-describedby');
-  popoverTarget=null;popoverPinned=false;$("operatorPopover").hidden=true;
+  popoverTarget=null;$("operatorPopover").hidden=true;
 }
-function showOperatorPopover(target,pinned=false) {
+function showOperatorPopover(target) {
   const html=popoverBodies.get(target.dataset.popover);if(!html)return;
   clearTimeout(popoverOpenTimer);
   clearTimeout(popoverTimer);
   if(popoverTarget&&popoverTarget!==target)popoverTarget.removeAttribute('aria-describedby');
-  popoverTarget=target;popoverPinned=pinned;
+  popoverTarget=target;
   const panel=$("operatorPopover");panel.innerHTML=html;panel.hidden=false;
   target.setAttribute('aria-describedby','operatorPopover');
   positionOperatorPopover();
@@ -599,28 +604,39 @@ function positionOperatorPopover(){
 $("operatorPopover").addEventListener('toggle',()=>positionOperatorPopover(),true);
 document.addEventListener('pointerover',event=>{
   const target=event.target.closest('[data-popover]');
-  if(target&&!target.contains(event.relatedTarget)&&!popoverPinned){clearTimeout(popoverTimer);clearTimeout(popoverOpenTimer);if(popoverTarget&&popoverTarget!==target)hideOperatorPopover();popoverOpenTimer=setTimeout(()=>{if(target.isConnected&&!popoverPinned)showOperatorPopover(target);},550);}
+  if(target&&!target.contains(event.relatedTarget)){clearTimeout(popoverTimer);clearTimeout(popoverOpenTimer);if(popoverTarget===target)return;if(popoverTarget)hideOperatorPopover();popoverOpenTimer=setTimeout(()=>{if(target.isConnected)showOperatorPopover(target);},550);}
   if(event.target.closest('#operatorPopover'))clearTimeout(popoverTimer);
 });
 document.addEventListener('pointerout',event=>{
-  if(popoverPinned)return;
   const container=event.target.closest('[data-popover],#operatorPopover');
   if(container&&!container.contains(event.relatedTarget)){clearTimeout(popoverOpenTimer);clearTimeout(popoverTimer);popoverTimer=setTimeout(hideOperatorPopover,220);}
 });
 document.addEventListener('focusin',event=>{
-  const target=event.target.closest('[data-popover]');if(target&&!popoverPinned&&target.matches(':focus-visible'))showOperatorPopover(target);
+  const target=event.target.closest('[data-popover]');if(target&&target.matches(':focus-visible'))showOperatorPopover(target);
+  if(event.target.closest('#operatorPopover'))clearTimeout(popoverTimer);
 });
 document.addEventListener('focusout',event=>{
-  if(event.target.closest('[data-popover]')&&!popoverPinned&&!event.relatedTarget?.closest('#operatorPopover'))hideOperatorPopover();
+  if(event.target.closest('[data-popover],#operatorPopover')&&!event.relatedTarget?.closest('[data-popover],#operatorPopover'))hideOperatorPopover();
 });
 document.addEventListener('click',event=>{
   const target=event.target.closest('[data-popover]');
-  if(target){if(popoverPinned&&popoverTarget===target)hideOperatorPopover();else showOperatorPopover(target,true);}
-  else if(event.target.closest('#operatorPopover')){popoverPinned=true;clearTimeout(popoverTimer);}
+  if(target){if(popoverTarget!==target)showOperatorPopover(target);else clearTimeout(popoverTimer);}
+  else if(event.target.closest('#operatorPopover')){
+    clearTimeout(popoverTimer);
+    const toggle=event.target.closest('[data-toggle-team-skills]');
+    if(toggle){
+      const expanded=toggle.getAttribute('aria-expanded')!=='true';
+      toggle.setAttribute('aria-expanded',String(expanded));
+      if(!toggle.dataset.collapsedLabel)toggle.dataset.collapsedLabel=toggle.textContent;
+      toggle.textContent=expanded?'收起全组技能':toggle.dataset.collapsedLabel;
+      $("operatorPopover").querySelectorAll('.team-skill-descriptions').forEach(node=>{node.hidden=!expanded;});
+      positionOperatorPopover();
+    }
+  }
   else hideOperatorPopover();
 });
-document.addEventListener('keydown',event=>{if(event.key==='Escape')hideOperatorPopover();else if(['Enter',' '].includes(event.key)){const target=event.target.closest('[role=button][data-popover]');if(target){event.preventDefault();showOperatorPopover(target,true);}}});
-window.addEventListener('scroll',event=>{if(!popoverPinned&&!$("operatorPopover").contains(event.target))hideOperatorPopover();},true);
+document.addEventListener('keydown',event=>{if(event.key==='Escape')hideOperatorPopover();else if(['Enter',' '].includes(event.key)){const target=event.target.closest('[role=button][data-popover]');if(target){event.preventDefault();showOperatorPopover(target);}}});
+window.addEventListener('scroll',event=>{if(!$("operatorPopover").contains(event.target))hideOperatorPopover();},true);
 window.addEventListener('resize',()=>{fitTimelineSegments();hideOperatorPopover();});
 new ResizeObserver(fitTimelineSegments).observe($("operatorTimeline"));
 const rosterManager=createRosterManager({getCatalog:()=>state.catalog,getRoster:()=>state.roster,
