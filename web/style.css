@@ -135,3 +135,14 @@ input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-m
 .roster-inspector{max-height:40vh;overflow:auto;flex-shrink:0}.kpis article[role=button]{cursor:pointer}.section-index,.card-kicker{font-size:11px}.timeline-axis>div{min-width:0}.roster-layout{min-height:140px}
 
 .mechanism-coverage{font-size:15px;color:var(--green);padding:6px 0}
+/* Actual calculation phases; no synthetic percentage for iterative search. */
+.calculation-progress{margin-top:16px;padding:14px;border:1px solid var(--border);border-radius:12px;font-size:14px}
+.calculation-progress[hidden]{display:none}
+.calculation-heading{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.calculation-heading strong{font-size:16px}
+.calculation-progress p,.quick-simulation .calculation-heading+p{font-size:14px;line-height:1.5;margin:9px 0}
+.calculation-stages{display:grid;gap:7px;margin-top:12px}
+.calculation-stages>div{display:flex;justify-content:space-between;gap:10px;opacity:.65}
+.calculation-stages b{font-variant-numeric:tabular-nums;font-weight:500}
+.calculation-stages .is-current{opacity:1;color:var(--gold);font-weight:650}
+.calculation-stages .is-current span:before{content:'●';font-size:9px;margin-right:7px}

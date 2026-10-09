@@ -21,6 +21,8 @@ from maabase.importers import parse_roster
 from maabase.optimizer import optimize
 from maabase.roster_store import load_roster, save_roster
 from maabase.simulator import simulate
+from maabase.calculation import calculation
+from maabase.jobs import JobStore
 from maabase.skland import Client as SklandClient
 from maabase.skland import SklandError, create_scan, credential_from_scan_code, get_scan_code
 
@@ -32,9 +34,21 @@ from maabase.operator_catalog import operator_cards
 CATALOG = json.loads((ROOT / "data" / "catalog.json").read_text(encoding="utf-8"))
 OPERATOR_CARDS = operator_cards(CATALOG)
 ROSTER_PATH = ROOT / "data" / "user_roster.json"
-APP_REVISION = "2026.09.15-login-cycles-v18"
+APP_REVISION = "2026.10.09-recycle-progress-v19"
+JOBS = JobStore()
 SCAN_SESSIONS: dict[str, dict] = {}
 SCAN_LOCK = threading.Lock()
+
+
+@calculation
+def optimize_job(payload):
+    payload.setdefault('include_rotation', True)
+    return optimize(payload, CATALOG)
+
+
+@calculation
+def simulation_job(payload):
+    return simulate(payload, CATALOG)
 
 
 def _qr_data_uri(value: str) -> str:
@@ -128,6 +142,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._json(200, {"app": "MaaBaseOptimizer", "app_revision": APP_REVISION})
             return
+        if path.startswith('/api/jobs/'):
+            pieces = path.strip('/').split('/')
+            try:
+                if len(pieces) == 3:
+                    self._json(200, JOBS.get(pieces[2]))
+                elif len(pieces) == 4 and pieces[3] == 'result':
+                    self._json(200, JOBS.result(pieces[2]))
+                else:
+                    self._json(404, {'error': '计算任务不存在'})
+            except KeyError:
+                self._json(404, {'error': '计算任务已过期，请重新计算'})
+            except ValueError as exc:
+                self._json(409, {'error': str(exc)})
+            return
         if path == "/api/operators":
             operators = OPERATOR_CARDS
             self._json(200, {
@@ -203,6 +231,11 @@ class Handler(BaseHTTPRequestHandler):
                 with SCAN_LOCK:
                     SCAN_SESSIONS.pop(scan_id, None)
                 self._json(200, {"operators": roster, "count": len(roster), "account": account})
+            elif self.path in {'/api/optimize/jobs', '/api/simulate/jobs'}:
+                if not isinstance(payload, dict):
+                    raise ValueError('请求格式错误')
+                worker = optimize_job if self.path == '/api/optimize/jobs' else simulation_job
+                self._json(202, {'id': JOBS.submit(worker, payload)})
             elif self.path == "/api/optimize":
                 if isinstance(payload, dict):
                     payload.setdefault("include_rotation", True)

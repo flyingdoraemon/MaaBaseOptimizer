@@ -67,6 +67,12 @@ def compile_morale(schedules: list[dict], cycle: float, horizon: float, interval
     def effective(room, active, all_rooms):
         ids = room.get('operators') or []
         relevant = set(ids) & active
+        if room.get('key') == 'recycle' and room.get('recycle'):
+            from .recycle import evaluate_recycle
+            if relevant == set(ids):
+                return room
+            evaluated = evaluate_recycle([prepared[x] for x in ids if x in relevant and x in prepared], room['recycle'])
+            return {**room, **evaluated, 'operators': ids, 'active_operators': evaluated['operators']}
         if not catalog or not set(ids) <= prepared.keys():
             if relevant == set(ids):
                 return room

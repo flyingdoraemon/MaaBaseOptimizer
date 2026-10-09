@@ -8,6 +8,9 @@ import heapq
 import itertools
 from typing import Any
 
+from .calculation import calculation, timed
+from .recycle import settings as recycle_settings, evaluate_recycle
+
 from .model import active_skills, generate_candidates, prepare_operators
 from .morale import analyze_morale, choose_dorm_helper
 from .scheduler import DRONE_CAPACITY, build_rotation, build_staggered_production_curve
@@ -147,6 +150,7 @@ def _solve_beam(
     return states[0][2], f"候选集协调搜索（宽度 {width}）"
 
 
+@timed('solver')
 def _solve(
     candidates: dict[str, list[dict]], groups: list[GroupSpec], objective_mode: str,
     reusable_ids: set[str] | None = None,
@@ -550,6 +554,7 @@ def _control_row(team: list[dict], context: BaseContext) -> dict | None:
 
 def _support_rows(
     operators: list[dict], used: set[str], shift_hours: float, excluded_ids: set[str] | None = None, training_ids: list[str] | None = None,
+    recycle_config: dict | None = None,
 ) -> list[dict]:
     """Choose reception/office workers without reusing production operators."""
     excluded_ids = excluded_ids or set()
@@ -568,10 +573,17 @@ def _support_rows(
 
     training = [operator for operator in available if operator["id"] in (training_ids or [])]
     available = [operator for operator in available if operator not in training]
+    # Reserve dedicated recycler skills before neutral fillers can consume
+    # them in reception. Fill remaining seats only after the other utilities.
+    recycling = sorted([op for op in available if any(s.get('room') == 'RECYCLE' for s in op['skills'])],
+                       key=lambda op: skill_score(op, 'RECYCLE'), reverse=True)[:recycle_config['slots']] if recycle_config else []
+    available = [op for op in available if op not in recycling]
     meeting = sorted(available, key=lambda operator: skill_score(operator, "MEETING"), reverse=True)[:2]
     meeting_ids = {operator["id"] for operator in meeting}
     office_pool = [operator for operator in available if operator["id"] not in meeting_ids]
     office = sorted(office_pool, key=lambda operator: skill_score(operator, "HIRE"), reverse=True)[:1]
+    if recycle_config:
+        recycling += [op for op in office_pool if op not in office][:recycle_config['slots'] - len(recycling)]
 
     def row(key: str, room_name: str, team: list[dict], skill_room: str) -> dict | None:
         if not team:
@@ -604,6 +616,7 @@ def _support_rows(
         row("reception", "会客室", meeting, "MEETING"),
         row("office", "人力办公室", office, "HIRE"),
         row("training", "训练室协助位", training, "TRAINING"),
+        evaluate_recycle(recycling, recycle_config) if recycle_config else None,
     ) if item]
 
 
@@ -721,8 +734,10 @@ def production_counts(payload: dict, factory_count: int, trade_count: int) -> tu
     return gold, exp, shard, orundum
 
 
+@calculation
 def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dict:
     roster = payload.get("operators") or []
+    recycle_config = recycle_settings(payload, catalog)
     operators = prepare_operators(roster, catalog)
     reusable_ids = {str(operator_id) for operator_id in payload.get("_reusable_operator_ids", []) if operator_id}
     fiammetta = next((operator for operator in operators if operator["id"] == "char_300_phenxi"), None)
@@ -759,7 +774,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     model_shift_hours_b = max(1.0, min(24.0, float(payload.get("_model_shift_hours_b", model_shift_hours))))
     base_context = BaseContext(
         shift_hours=model_shift_hours,
-        collection_interval_hours=max(1.0, min(24.0, float(payload.get("collection_interval_hours", payload.get("shift_hours", 8))))),
+        collection_interval_hours=max(1.0, min(24.0, float(payload.get("collection_interval_hours", 8)))),
         gold_lines=gold_count,
         formula_types=sum(bool(x) for x in (gold_count, exp_count, shard_count)),
         num_trade=trade_count,
@@ -780,12 +795,13 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     # former single-state path to keep regression runs laptop-friendly.
     training_ids = [op["id"] for op in operators if op["id"] == "char_4133_logos"] if any("bskill_pow_spd_P1" in op["icons"] for op in operators) else []
     base_context.training_operator_ids = training_ids
-    control_pool = [operator for operator in operators if operator["id"] not in reusable_ids and operator["id"] not in training_ids]
+    recycle_ids = {op['id'] for op in operators if any(s.get('room') == 'RECYCLE' for s in op['skills'])} if recycle_config else set()
+    control_pool = [operator for operator in operators if operator["id"] not in reusable_ids and operator["id"] not in training_ids and operator['id'] not in recycle_ids]
     control_options = select_control_options(control_pool, base_context, 12 if len(operators) <= 180 else 2)
     best_plan: tuple[float, list[dict], BaseContext, dict, str, dict] | None = None
     for control_team_option, context_option in control_options:
         control_ids = {operator["id"] for operator in control_team_option}
-        production_operators = [operator for operator in operators if operator["id"] not in control_ids and operator["id"] not in training_ids]
+        production_operators = [operator for operator in operators if operator["id"] not in control_ids and operator["id"] not in training_ids and operator['id'] not in recycle_ids]
         power_seed = generate_candidates(production_operators, "power", catalog, keep, context_option)[:3]
         context_option.platform_power_count = platform_count(power_seed)
         if context_option.platform_power_count:
@@ -858,7 +874,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                 op["id"] for op in assigned_operators if op.get("team_id") == "sees"
             })
             if any(op.get("team_id") == "sees" for op in operators):
-                support_ids = {id for row in _support_rows(operators, assigned_ids, model_shift_hours, reusable_ids, training_ids)
+                support_ids = {id for row in _support_rows(operators, assigned_ids, model_shift_hours, reusable_ids, training_ids, recycle_config)
                                for id in row.get("operators", [])}
                 sees_operator_ids = sorted(set(sees_operator_ids) | {
                     id for id in support_ids if catalog["operators"].get(id, {}).get("team_id") == "sees"
@@ -933,7 +949,8 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
     control_row = _control_row(control_team, context)
     occupied = {operator for values in selected.values() for room in values for operator in room.get("operators", [])}
     occupied.update(operator["id"] for operator in control_team)
-    auxiliary_rows = _support_rows(operators, occupied, base_context.shift_hours, reusable_ids, training_ids)
+    auxiliary_rows = _support_rows(operators, occupied, base_context.shift_hours, reusable_ids, training_ids, recycle_config)
+    metrics['recycle_cycles_per_day'] = sum(row.get('recycle_cycles_per_day', 0) for row in auxiliary_rows)
     result = {
         "solver": solver,
         "search_audit": {
@@ -949,7 +966,8 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
         },
         "layout": {"name": layout_key, "trade": trade_count, "lmd_trade": lmd_trade_count,
                    "orundum_trade": orundum_count, "factory": factory_count, "gold": gold_count,
-                   "exp": exp_count, "shard": shard_count, "power": power_count},
+                   "exp": exp_count, "shard": shard_count, "power": power_count,
+                   "recycle_level": recycle_config['level'] if recycle_config else 0},
         "objective": {
             "mode": objective_mode,
             "label": "固定产品布局：一图流等效理智最大化" if objective_mode == "sanity_value" else "固定产品布局：总产能等权最大化",
@@ -1084,6 +1102,7 @@ def optimize(payload: dict, catalog: dict, include_frontier: bool = True) -> dic
                     "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
                     "gold_net_per_day", "orundum_per_day", "shards_net_per_day",
                     "shards_made_per_day", "shards_used_per_day", "lmd_shard_cost_per_day",
+                    "recycle_cycles_per_day",
                 ):
                     if key in final_curve:
                         weighted_metrics[key] = round(float(final_curve[key]) * 24 / curve["hours"], 2)

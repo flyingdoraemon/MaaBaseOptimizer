@@ -27,6 +27,31 @@ async function request(path, options = {}) {
   return data;
 }
 
+const calculationStages = {preparing:'准备数据', queued:'等待计算', efficiency:'候选与效率', solver:'全局选人', schedule:'轮换安排', curve:'周期产出', simulation:'时间快进模拟'};
+function renderCalculationProgress(id, job) {
+  const node=$(id), progress=job.progress||{}, times=progress.stage_seconds||{};
+  node.hidden=false;
+  node.innerHTML=`<div class="calculation-heading"><strong>${job.status==='completed'?'计算完成':job.status==='failed'?'计算失败':escapeHtml(calculationStages[progress.stage]||'正在计算')}</strong><span>${(+progress.elapsed_seconds||0).toFixed(1)} 秒</span></div>${job.status==='completed'?'':`<p>${escapeHtml(progress.detail||'正在协调各房间方案')}</p>`}<div class="calculation-stages">${Object.entries(calculationStages).filter(([key])=>!['preparing','queued'].includes(key)).map(([key,label])=>`<div class="${key===progress.stage&&job.status==='running'?'is-current':''}"><span>${label}</span><b>${times[key]==null?'—':`${times[key].toFixed(1)} s`}</b></div>`).join('')}</div>`;
+}
+
+async function calculationJob(kind, payload, onProgress) {
+  const job=await request(`/api/${kind}/jobs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  let failures=0;
+  for (;;) {
+    let status;
+    try { status=await request(`/api/jobs/${encodeURIComponent(job.id)}`); failures=0; }
+    catch(error) { if(++failures>=3)throw error; await new Promise(resolve=>setTimeout(resolve,1000)); continue; }
+    onProgress?.(status);
+    if(status.status==='failed')throw new Error(status.error||'计算失败');
+    if(status.status==='completed') {
+      const result=await request(`/api/jobs/${encodeURIComponent(job.id)}/result`);
+      onProgress?.({...status,progress:result.performance||status.progress});
+      return result;
+    }
+    await new Promise(resolve=>setTimeout(resolve,800));
+  }
+}
+
 function saveRoster() {
   localStorage.setItem("maaBaseRoster", JSON.stringify(state.roster));
 }
@@ -197,11 +222,17 @@ $("scheduleMode").addEventListener("change",()=>{
 });
 updateLayoutControls();
 
+$("recycleLevel").addEventListener('change',()=>{
+  $("recycleBoost").disabled=+$("recycleLevel").value<3;
+  if($("recycleBoost").disabled)$("recycleBoost").checked=false;
+});
+
 $("optimizeButton").addEventListener("click", async () => {
   hideMessage("solveMessage");
   if (state.roster.length < 21) return message("solveMessage", "请先导入至少 21 名有效干员。", true);
   if ($("scheduleMode").value === "fixed" && ![8,12].includes(+("value" in $("shiftHours") ? $("shiftHours").value : 8))) return message("solveMessage", "固定轮班请选择 8 或 12 小时。", true);
-  const button = $("optimizeButton"); button.disabled = true; button.textContent = "正在枚举并协调候选组合…";
+  const button = $("optimizeButton"); button.disabled = true; button.textContent = "正在计算…";
+  renderCalculationProgress('solveProgress',{status:'queued',progress:{stage:'queued'}});
   const payload = {
     operators: state.roster,
     base_layout: $("baseLayout").value,
@@ -222,6 +253,8 @@ $("optimizeButton").addEventListener("click", async () => {
     max_work_hours: +$("shiftHours").value,
     morale_floor: 1,
     collection_interval_hours: +$("collectionInterval").value,
+    recycle_level: +$("recycleLevel").value,
+    recycle_boost: !$("recycleBoost").disabled && $("recycleBoost").checked,
     external_gold_per_day: 0,
     gold_inventory: 0,
     shard_inventory: 0,
@@ -229,7 +262,7 @@ $("optimizeButton").addEventListener("click", async () => {
     candidate_limit: 320,
   };
   try {
-    const data = await request("/api/optimize", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    const data = await calculationJob('optimize',payload,job=>renderCalculationProgress('solveProgress',job));
     renderResults(data);
   } catch (error) { message("solveMessage", error.message, true); }
   finally { button.disabled = false; button.innerHTML = "<span>开始计算</span><b>→</b>"; }
@@ -292,7 +325,7 @@ function renderResults(data) {
       ${output?`<div class="room-output"><span>本队在岗时日产等效</span><strong>${escapeHtml(output)}</strong><small>按轮换占比 ${(roomShare*100).toFixed(1)}% 折算日产：${escapeHtml(roomOutput(room,roomShare))}</small></div>`:""}
       ${event ? `<div class="endurance"><span>实际在岗 ${event.scheduled_work_hours}h</span><span>本组合安全上限 ${event.safe_work_hours}h</span><span>心情消耗 ${rateRange}/h</span></div>` : ""}
       ${room.group ? `<span class="confidence">${escapeHtml(room.group)} · MAA 组合候选</span>` : `<span class="confidence">${room.confidence === "direct" ? "直接数值模型" : room.confidence === "state_model" ? "跨设施状态模型" : "保守估算"}</span>`}
-      <details class="room-details"><summary>效率与计算明细</summary><div class="eff-ledger">${totalEfficiency!=null?`<span>技能/状态 +${room.efficiency}%</span><span>${room.key==="power"?"基础 +5%":`基础 +${room.names.length}%`}</span><span>${room.key==="power"?`充能 +${totalEfficiency.toFixed(2)}%`:`倍率 ×${(+room.multiplier).toFixed(4)}`}</span>`:""}</div>${(room.mechanic_notes || []).length ? `<div class="skills">机制：${room.mechanic_notes.map(escapeHtml).join("；")}</div>` : ""}</details>
+      <details class="room-details"><summary>效率与计算明细</summary><div class="eff-ledger">${totalEfficiency!=null?`<span>技能/状态 +${room.efficiency}%</span><span>${room.key==="power"?"基础 +5%":room.key==='recycle'?`设施 ×${room.recycle.base_multiplier} · 进驻 +${room.names.length}%${room.recycle.continuous_boost?' · 投料 +50%':''}`:`基础 +${room.names.length}%`}</span><span>${room.key==="power"?`充能 +${totalEfficiency.toFixed(2)}%`:`倍率 ×${(+room.multiplier).toFixed(4)}`}</span>`:""}</div>${(room.mechanic_notes || []).length ? `<div class="skills">机制：${room.mechanic_notes.map(escapeHtml).join("；")}</div>` : ""}</details>
     </article>`}).join("")}</div></section>`;
   }).join("");
   runQuickSimulation(data);
@@ -314,6 +347,7 @@ function roomOutput(room,scale=1) {
   if(room.key==="shard") return `${(24*(+room.multiplier||0)*scale).toFixed(2)} 源石碎片`;
   if(room.key==="orundum"&&room.orundum) return `${n(room.orundum.orundum_per_day)} 合成玉 / ${(+room.orundum.shards_per_day*scale).toFixed(2)} 碎片消耗`;
   if(room.key==="power") return `${(240*(5+(+room.efficiency||0))/100*scale).toFixed(2)} 架无人机增量`;
+  if(room.key==='recycle') return `${(room.recycle_cycles_per_day*scale).toFixed(3)} 次材料转化`;
   return "";
 }
 
@@ -501,20 +535,19 @@ function renderYieldCurve(curve) {
 
 $("curveMetric").addEventListener("click",event=>{const button=event.target.closest("[data-resource]");if(!button)return;curveMetric=button.dataset.resource;$("curveMetric").querySelectorAll("button").forEach(item=>item.setAttribute("aria-pressed",String(item===button)));renderYieldCurve(state.lastResult?.rotation?.production_curve);});
 
-async function simulateSchedule(result, days, trials) {
-  return request("/api/simulate", {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({rooms:result.rooms, metrics:result.metrics, rotation:result.rotation,
+async function simulateSchedule(result, days, trials, onProgress) {
+  return calculationJob('simulate', {rooms:[...(result.rooms||[]),...(result.support_rooms||[])], metrics:result.metrics, rotation:result.rotation,
       days, trials, seed:$("simSeed").value || undefined,
-      inventory_policy:$("simInventoryPolicy").value})
-  });
+      inventory_policy:$("simInventoryPolicy").value}, onProgress);
 }
 
 async function runQuickSimulation(result) {
   const sequence = ++state.quickSimSequence;
   $("quickSimulation").innerHTML = '<div class="sim-loading"><i></i><span>正在快进 30 天 × 300 次…</span></div>';
   try {
-    const data=await simulateSchedule(result,30,300);
+    const data=await simulateSchedule(result,30,300,job=>{
+      if(sequence===state.quickSimSequence)renderCalculationProgress('quickSimulation',job);
+    });
     if (sequence !== state.quickSimSequence) return;
     const d=data.difference_percent, s=data.simulated;
     $("quickSimulation").innerHTML = `<div class="quick-grid">
@@ -548,7 +581,11 @@ $("simulateButton").addEventListener("click", async () => {
   const button = $("simulateButton"); button.disabled = true; button.textContent = "正在快进…";
   hideMessage("simulateMessage");
   try {
-    const data = await simulateSchedule(state.lastResult,+$("simDays").value,+$("simTrials").value);
+    const data = await simulateSchedule(state.lastResult,+$("simDays").value,+$("simTrials").value,job=>{
+      const p=job.progress||{};
+      message('simulateMessage',`${calculationStages[p.stage]||'正在模拟'} · ${p.detail||''} · ${(+p.elapsed_seconds||0).toFixed(1)} 秒`);
+    });
+    message('simulateMessage',`快进完成 · ${data.performance.elapsed_seconds.toFixed(1)} 秒`);
     renderSimulation(data);
   } catch (error) { message("simulateMessage", error.message, true); }
   finally { button.disabled = false; button.textContent = "开始快进模拟"; }
@@ -562,6 +599,7 @@ function renderSimulation(data) {
     card("经验 / 日", number(Math.round(s.exp_per_day)), "exp_per_day") +
     card("赤金制造 / 日", s.gold_made_per_day, "gold_made_per_day") +
     card("赤金消耗 / 日", s.gold_used_per_day, "gold_used_per_day") +
+    (s.recycle_cycles_per_day>0?card('回收站转化 / 日',s.recycle_cycles_per_day.toFixed(3),'recycle_cycles_per_day','<small>按实际收取的转化次数计算</small>'):'') +
     (s.orundum_per_day > 0 ? card("合成玉 / 日", Math.round(s.orundum_per_day), "orundum_per_day") + card("碎片净变化 / 日", signed(s.shards_net_per_day), "shards_made_per_day") : "") +
     `<details class="simulation-notes"><summary>本轮随机轨迹与假设</summary><p>第 1 条轨迹：龙门币净收入 ${number(Math.round(BaseView.income(data.sample_run).net))}/日，赤金净流 ${signed(data.sample_run?.gold_net_per_day||0)}/日；种子 ${escapeHtml(data.seed)}。${data.days} 天 × ${number(data.trials)} 次。${data.assumptions.map(escapeHtml).join(" ")}</p></details>`;
   const entries=(data.collection_events||[]).filter(event=>event.hour<=48);

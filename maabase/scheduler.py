@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .calculation import timed
+
 import math
 
 from .valuation import candidate_daily_value, metrics_daily_value, metrics_layout_score
@@ -197,6 +199,8 @@ def _choose_durations(
 def _room_score(room: dict, objective_mode: str) -> float:
     """Score one room without importing the optimizer and creating a cycle."""
     key = str(room.get("key") or "")
+    if key == 'recycle':
+        return float(room.get('multiplier', 0))
     if objective_mode == "sanity_value":
         return candidate_daily_value(room, key)
     if key == "trade":
@@ -293,7 +297,7 @@ def _average_metrics(a: dict, b: dict, a_hours: float = 1.0, b_hours: float = 1.
         "shards_net_per_day", "shard_material_used_per_day", "gold_made_per_day",
         "gold_used_per_day", "gold_production_net_per_day", "gold_external_per_day",
         "gold_net_per_day", "drones_per_day", "drones_recovery_potential_per_day",
-        "drone_overflow_lost_per_day", "drone_hours_per_day", "power_bonus",
+        "drone_overflow_lost_per_day", "drone_hours_per_day", "power_bonus", "recycle_cycles_per_day",
     }
     total = max(1e-9, a_hours + b_hours)
     result = dict(a)
@@ -411,7 +415,7 @@ def _instant_rates(team: dict, elapsed_hours: float) -> dict[str, float]:
         key: float(base_metrics.get(key, 0) or 0) / 24.0
         for key in (
             "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
-            "gold_net_per_day", "orundum_per_day", "shards_net_per_day", "drones_per_day",
+            "gold_net_per_day", "orundum_per_day", "shards_net_per_day", "drones_per_day", "recycle_cycles_per_day",
         )
     }
     rates["drones_per_day"] = float(
@@ -499,7 +503,7 @@ def _production_curve(
         "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
         "gold_net_per_day", "orundum_per_day", "shards_net_per_day", "drones_per_day",
         "shards_made_per_day", "shards_used_per_day",
-        "lmd_shard_cost_per_day", "lmd_net_after_shards_per_day",
+        "lmd_shard_cost_per_day", "lmd_net_after_shards_per_day", "recycle_cycles_per_day",
     )
     cycle = durations["A"] + durations["B"]
 
@@ -622,7 +626,7 @@ def _build_staggered_rotation(
     handovers: dict[float, list[dict]] = {}
     production_durations = []
     room_order = {"control": 0, "trade": 1, "orundum": 2, "gold": 3, "exp": 4,
-                  "shard": 5, "power": 6, "reception": 7, "office": 8}
+                  "shard": 5, "power": 6, "reception": 7, "office": 8, "recycle": 9}
 
     plans = []
     for room_a, room_b in pairs:
@@ -759,6 +763,7 @@ def _build_staggered_rotation(
     }
 
 
+@timed('curve')
 def build_staggered_production_curve(
     rotation: dict,
     constants: dict,
@@ -775,7 +780,7 @@ def build_staggered_production_curve(
         "lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
         "gold_net_per_day", "orundum_per_day", "shards_net_per_day", "drones_per_day",
         "shards_made_per_day", "shards_used_per_day",
-        "lmd_shard_cost_per_day", "lmd_net_after_shards_per_day",
+        "lmd_shard_cost_per_day", "lmd_net_after_shards_per_day", "recycle_cycles_per_day",
     )
     shard_cost = 1000 if (rotation.get("average_metrics") or {}).get("shard_recipe") == "device" else 1600
     candidates: dict[tuple[str, str], dict] = {}
@@ -832,6 +837,8 @@ def build_staggered_production_curve(
             rates["shards_net_per_day"] = -rates["shards_used_per_day"]
         elif key == "power":
             rates["drones_per_day"] = 10.0 * (5.0 + float(room.get("efficiency", 0) or 0)) / 100.0
+        elif key == 'recycle':
+            rates['recycle_cycles_per_day'] = 60 / room['recycle']['base_minutes'] * _instant_multiplier(room, elapsed)
         rates["lmd_net_after_shards_per_day"] = rates["lmd_per_day"] - rates["lmd_shard_cost_per_day"]
         return rates
 
@@ -985,6 +992,7 @@ def build_staggered_production_curve(
     }
 
 
+@timed('schedule')
 def build_rotation(
     team_a: dict,
     team_b: dict,

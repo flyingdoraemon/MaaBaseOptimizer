@@ -81,7 +81,11 @@ class SimulatorTests(unittest.TestCase):
             {'minutes': 210, 'gold': 3, 'lmd': 1500, 'probability': .5},
             {'minutes': 276, 'gold': 4, 'lmd': 2000, 'probability': .2}]})
         first = run([a], trials=40)
-        self.assertEqual(first, run([a], trials=40))
+        second = run([a], trials=40)
+        # Wall-clock profiling is deliberately not seed-dependent. Every
+        # simulated value, event and morale record must still be identical.
+        self.assertEqual({k: v for k, v in first.items() if k != 'performance'},
+                         {k: v for k, v in second.items() if k != 'performance'})
         self.assertNotEqual(first['trace'], run([a], seed=124)['trace'])
         self.assertLessEqual(first['simulated']['lmd_p05'], first['simulated']['lmd_p95'])
         self.assertGreater(first['standard_deviation']['lmd_per_day'], 0)

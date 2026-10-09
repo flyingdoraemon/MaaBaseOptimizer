@@ -1144,7 +1144,7 @@ def mechanism_coverage(operators: list[dict]) -> dict:
     for operator in operators:
         for skill in operator["skills"]:
             room = skill.get("room")
-            if room not in {"MANUFACTURE", "TRADING", "POWER", "CONTROL"}:
+            if room not in {"MANUFACTURE", "TRADING", "POWER", "CONTROL", "RECYCLE"}:
                 continue
             item = {
                 "operator": operator["name"],
@@ -1154,7 +1154,7 @@ def mechanism_coverage(operators: list[dict]) -> dict:
             }
             icon = skill.get("icon", "")
             text = str(skill.get("description") or "")
-            if icon in TRADE_ECONOMIC_ICONS or icon in CONTEXT_MODELED_ICONS:
+            if icon in TRADE_ECONOMIC_ICONS or icon in CONTEXT_MODELED_ICONS or icon in {'bskill_recycle_spd&cost1', 'bskill_recycle_spd&cost2'}:
                 exact.append(item)
             elif room == "CONTROL" and not any(word in text for word in production_words):
                 ignored.append({**item, "reason": "仅影响心情/非生产设施，作为轮班约束而非产出目标"})

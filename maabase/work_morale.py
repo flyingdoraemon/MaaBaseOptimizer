@@ -101,7 +101,7 @@ def morale_rates(room: dict, control: dict | None = None, active_ids: set | None
                     alternative = max(alternative, .05 * (1 + int(state.get("human_fire", 0)) // 20))
                 elif icon == "bskill_ctrl_cost_expand":
                     alternative = max(alternative, .1 + .1 * ("魔王" in control.get("names", [])))
-                elif icon == "bskill_ctrl_lonely":
+                elif icon == "bskill_ctrl_lonely" and room.get('key') in {'trade', 'orundum', 'gold', 'exp', 'shard', 'power', 'office', 'reception'}:
                     extra = max(extra, (.1 if room.get("key") in {"power", "office", "reception"} else 0) + .05 * sum(s.get("icon") == "bskill_ctrl_cost" for d in control_details for s in d.get("skills", [])))
         reduction = max(0, alternative - .05 * len(controls)) + extra
         for operator in rates:

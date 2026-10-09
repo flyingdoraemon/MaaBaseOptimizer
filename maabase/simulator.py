@@ -12,13 +12,14 @@ from statistics import fmean, pstdev
 from .scheduler import _instant_multiplier
 from .login_calendar import login_hours
 from .morale_runtime import compile_morale
+from .calculation import calculation, timed, current_calculation
 
 PRODUCTS = {"gold": (72.0, {"gold_made_per_day": 1.0}),
             "exp": (180.0, {"exp_per_day": 1000.0}),
             "shard": (60.0, {"shards_made_per_day": 1.0}),
             "orundum": (120.0, {"shards_used_per_day": 2.0, "orundum_per_day": 20.0})}
 KEYS = ("lmd_per_day", "exp_per_day", "gold_made_per_day", "gold_used_per_day",
-        "shards_made_per_day", "shards_used_per_day", "orundum_per_day")
+        "shards_made_per_day", "shards_used_per_day", "orundum_per_day", "recycle_cycles_per_day")
 EPS = 1e-8
 
 
@@ -73,7 +74,7 @@ def _schedules(payload: dict) -> tuple[list[dict], float]:
             for event in row.get("events", []):
                 source = sources.get((event["team"], row["room"]))
                 if source is None:
-                    if row.get("key") in {*PRODUCTS, "trade", "power"}:
+                    if row.get("key") in {*PRODUCTS, "trade", "power", "recycle"}:
                         raise ValueError(f"轮班缺少房间数据：{row['room']} / {event['team']}")
                     continue
                 start, end = float(event["start"]) * 60, float(event["end"]) * 60
@@ -103,6 +104,8 @@ def _schedules(payload: dict) -> tuple[list[dict], float]:
             _number(room.get("multiplier", 1), "生产倍率", 0, 1000)
             if room.get("output_capacity") is not None:
                 _number(room["output_capacity"], "仓库容量", 1, 100000)
+            if key == 'recycle':
+                _number(room.get('recycle', {}).get('base_minutes'), '回收转化时长', .001)
             if key == "trade":
                 distribution = (room.get("trade") or {}).get("distribution") or []
                 if not distribution:
@@ -134,6 +137,8 @@ def _capacity(room: dict) -> int:
 
 def _new_job(room: dict, elapsed: float, rng: random.Random) -> tuple[float, dict]:
     key = room.get("key")
+    if key == 'recycle':
+        return float(room['recycle']['base_minutes']), {'recycle_cycles_per_day': 1.0}
     if key == "trade":
         economy = room["trade"]
         order = _draw_order(rng, _warm_distribution(economy["distribution"],
@@ -146,7 +151,7 @@ def _new_job(room: dict, elapsed: float, rng: random.Random) -> tuple[float, dic
 def _advance(state: dict, room: dict, start: float, elapsed: float, minutes: float,
              rng: random.Random, totals: dict, trace: list | None, instant=False) -> float:
     key = room.get("key")
-    if key not in {*PRODUCTS, "trade"}:
+    if key not in {*PRODUCTS, "trade", "recycle"}:
         return minutes
     speed = 1.0 if instant else max(0.0, _instant_multiplier(room, elapsed / 60))
     remaining = minutes
@@ -290,6 +295,8 @@ def _run(schedules: list[dict], cycle: float, horizon: float, interval: float,
                                   "pending_items": len(s["queue"])} for s in states]}
 
 
+@calculation
+@timed('simulation')
 def simulate(payload: dict, catalog: dict | None = None) -> dict:
     rotation = payload.get("rotation") or {}
     expected = rotation.get("average_metrics") or payload.get("metrics") or {}
@@ -312,6 +319,10 @@ def simulate(payload: dict, catalog: dict | None = None) -> dict:
     for value in initial.values():
         _number(value, "初始心情", 0, 24)
     effect_cache = {}
+    tracker = current_calculation()
+    if tracker:
+        tracker.detail = f'虚拟时间 {days} 天 · 1 / {trials} 次'
+        tracker.notify()
     rng = random.Random(seed)
     first = _run(schedules, cycle, days * 1440, interval, expected, rng, True, rotation, catalog, initial, effect_cache)
     first["trace"].sort(key=lambda event: (event["minute"], event["room"]))
@@ -319,9 +330,12 @@ def simulate(payload: dict, catalog: dict | None = None) -> dict:
     # Deterministic manufacturing-only schedules need just one replay.
     stochastic = any(room.get("key") == "trade" and len(room["trade"]["distribution"]) > 1
                      for row in schedules for _, _, room in row["spans"])
-    for _ in range(trials - 1):
+    for trial in range(trials - 1):
         samples.append(_run(schedules, cycle, days * 1440, interval, expected, rng, False, rotation, catalog, initial, effect_cache)["daily"]
                        if stochastic else first["daily"])
+        if tracker and (trial % 10 == 0 or trial == trials - 2):
+            tracker.detail = f'虚拟时间 {days} 天 · {trial + 2} / {trials} 次'
+            tracker.notify()
     simulated = {key: round(fmean(sample[key] for sample in samples), 6) for key in first["daily"]}
     lmd_samples = [sample["lmd_per_day"] for sample in samples]
     net_samples = [sample["lmd_net_after_shards_per_day"] for sample in samples]

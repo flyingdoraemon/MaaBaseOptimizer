@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from .calculation import current_calculation, stage
+
 from itertools import combinations
 import re
 from typing import Iterable
@@ -318,6 +321,21 @@ def prepare_operators(roster: list[dict], catalog: dict) -> list[dict]:
 
 def generate_candidates(operators: list[dict], product: str, catalog: dict, keep: int = 180,
                         context: BaseContext | None = None) -> list[dict]:
+    tracker = current_calculation()
+    labels = {'trade': '赤金订单', 'orundum': '源石订单', 'gold': '赤金制造', 'exp': '作战记录', 'shard': '源石碎片', 'power': '发电站'}
+    with stage('efficiency', f"{labels.get(product, product)} · {len(operators)} 名可用干员"):
+        if tracker is None:
+            return _generate_candidates(operators, product, catalog, keep, context)
+        # Full operator input plus automatically observed context dependencies.
+        # No hand-maintained list of skill-state dependencies to become stale
+        # when a new operator is added. Results never cross request boundaries.
+        key = (id(catalog), product, keep, json.dumps(operators,
+               sort_keys=True, default=sorted, ensure_ascii=False))
+        return tracker.candidates(key, context or BaseContext(),
+                                  lambda tracked: _generate_candidates(operators, product, catalog, keep, tracked))
+
+
+def _generate_candidates(operators, product, catalog, keep, context):
     context = context or BaseContext()
     room = "Power" if product == "power" else ("Trade" if product in {"trade", "orundum"} else "Mfg")
     group_icons = {

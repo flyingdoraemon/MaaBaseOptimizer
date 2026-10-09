@@ -1,6 +1,7 @@
 """Public roster cards, using unlocked skills and single-operator room formulas."""
 from .model import prepare_operators, evaluate_team
 from .state_model import BaseContext
+from .recycle import evaluate_recycle, settings
 
 
 def operator_cards(catalog):
@@ -14,6 +15,9 @@ def operator_cards(catalog):
             previews.append({"elite": elite, "level": level, "skills": skills,
                 "efficiency": {key: round(evaluate_team(prepared, key, catalog, BaseContext())['efficiency'], 2)
                                for key in ('gold', 'exp', 'shard', 'trade', 'orundum', 'power')}})
+            config = settings({}, catalog)
+            if config:
+                previews[-1]['efficiency']['recycle'] = evaluate_recycle(prepared, config)['efficiency']
         result.append({**{key: op.get(key) for key in ('id','name','rarity','profession','branch','branch_name')},
                        "previews": previews})
     return sorted(result, key=lambda item: (-item['rarity'], item['name']))
