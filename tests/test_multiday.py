@@ -21,6 +21,26 @@ def plan(label, first):
 
 
 class MultidayTests(unittest.TestCase):
+    def test_proviso_takes_long_shift_despite_lower_order_speed(self):
+        # Actual unlocked skills: Proviso upgrades the payout, while Texas
+        # and Lappland mostly accelerate ordinary orders. Compare LMD/h.
+        roster = [
+            {'id': 'char_4032_provs', 'elite': 2}, {'id': 'char_4063_quartz', 'elite': 1},
+            {'id': 'char_185_frncat', 'elite': 0}, {'id': 'char_102_texas', 'elite': 1},
+            {'id': 'char_140_whitew', 'elite': 2}, {'id': 'char_289_gyuki', 'elite': 1},
+        ]
+        ops = prepare_operators(roster, CATALOG)
+        control = {'operators': list('12345')}
+        context = BaseContext(formula_types=3, collection_interval_hours=8)
+        a, b = [{**evaluate_team(team, 'trade', CATALOG, context), 'key': 'trade',
+                 'room': '贸易站', 'control_room': control} for team in (ops[:3], ops[3:])]
+        self.assertLess(a['multiplier'], b['multiplier'])
+        self.assertEqual(a['trade']['expected_lmd'], 2250)
+        self.assertEqual(b['trade']['expected_lmd'], 1450)
+        self.assertGreater(a['trade']['lmd_per_day'], b['trade']['lmd_per_day'])
+        durations, _ = _choose_room_durations(a, b, 8, 1, 36, 'layout_output', None)
+        self.assertEqual(durations, {'A': 32, 'B': 8})
+
     def test_eight_hour_logins_allow_non_daily_cycles(self):
         # A consumes 0.9 mood/h (24h safe); B consumes 0.65 (32h safe).
         a=room('shards','a',2)

@@ -3,7 +3,7 @@ from pathlib import Path
 import unittest
 
 from maabase.model import prepare_operators
-from maabase.optimizer import _support_rows
+from maabase.optimizer import _support_rows, _production_allocation_audit
 from maabase.recycle import settings, evaluate_recycle
 from maabase.simulator import simulate
 from maabase.work_morale import morale_rates
@@ -44,6 +44,19 @@ class RecycleTests(unittest.TestCase):
         self.assertIn('char_4232_hbound', recycler['operators'])
         ids = [oid for row in rows for oid in row['operators']]
         self.assertEqual(len(ids), len(set(ids)))
+
+    def test_specialist_audit_distinguishes_missing_roster_from_assignment(self):
+        # Catalog availability does not imply ownership. The explanation must
+        # use the calculation's input, including the actual unlocked skill.
+        for elite in (None, 0, 2):
+            roster = [] if elite is None else [{'id': 'char_4232_hbound', 'elite': elite, 'level': 1}]
+            ops = prepare_operators(roster, self.catalog)
+            rows = _support_rows(ops, set(), 24, recycle_config=settings({}, self.catalog))
+            audit = _production_allocation_audit({'support_rooms': rows}, roster, self.catalog)
+            specialist = next(op for op in audit['recycle_specialists'] if op['operator_id'] == 'char_4232_hbound')
+            self.assertEqual(specialist['owned'], elite is not None)
+            self.assertEqual(specialist['efficiency'], {None: 0, 0: 20, 2: 30}[elite])
+            self.assertEqual(specialist['assignments'], {} if elite is None else {'A': ['回收站']})
 
     def test_progress_survives_handover_and_collects_only_when_online(self):
         # Unstaffed level 1: one conversion every 48h, repeated 16h/8h

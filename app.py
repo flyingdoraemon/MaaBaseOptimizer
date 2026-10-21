@@ -34,7 +34,7 @@ from maabase.operator_catalog import operator_cards
 CATALOG = json.loads((ROOT / "data" / "catalog.json").read_text(encoding="utf-8"))
 OPERATOR_CARDS = operator_cards(CATALOG)
 ROSTER_PATH = ROOT / "data" / "user_roster.json"
-APP_REVISION = "2026.10.09-recycle-progress-v19"
+APP_REVISION = "2026.10.22-trade-explanation-v20"
 JOBS = JobStore()
 SCAN_SESSIONS: dict[str, dict] = {}
 SCAN_LOCK = threading.Lock()

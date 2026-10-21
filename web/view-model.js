@@ -35,7 +35,24 @@
     if (width < 44 + count * 38) return 'compact';
     return width < 44 + count * 96 ? 'portraits' : 'full';
   }
-  const api = {operatorPreview, phaseNames, maxElite, maxLevel, moveOperator, sortOperators, income, segmentMode, fiammettaOwned};
+  function roomDecisionInfo(room, rotation={}, allocation={}) {
+    const economy=room.key==='trade'?room.trade:room.key==='orundum'?room.orundum:null;
+    const mechanicNotes=[...new Set([...(room.mechanic_notes||[]),...(economy?.notes||[])])];
+    const speedLabel=['trade','orundum'].includes(room.key)?'订单速度':room.key==='recycle'?'转化速度':'实际';
+    const orderSummary=room.key==='trade'&&economy
+      ? `平均每单 ${Number(economy.expected_lmd).toLocaleString('zh-CN')} 龙门币 · 基础用时 ${Number(economy.expected_minutes).toLocaleString('zh-CN')} 分钟`
+      : '';
+    const durations=rotation.room_work_hours?.[room.room], audit=rotation.room_duration_audit?.[room.room];
+    let rotationSummary='';
+    if (rotation.schedule_mode==='staggered'&&durations&&audit?.scores&&['trade','orundum','recycle'].includes(room.key)) {
+      const basis=rotation.objective_mode==='sanity_value'&&room.key!=='recycle'?'等效理智收益':room.key==='trade'?'龙门币收益':room.key==='orundum'?'合成玉产量':'转化次数';
+      rotationSummary=`按${basis}、心情和休息时间选择 A ${durations.A}h / B ${durations.B}h；换班仅在每 ${rotation.collection_interval_hours}h 上线的节点进行。`;
+    }
+    const missing=room.key==='recycle'?(allocation.recycle_specialists||[]).filter(op=>!op.owned).map(op=>op.operator):[];
+    const specialistSummary=missing.length?`${missing.join('、')}未在本次计算的 Box 中，可在干员管理中补充。`:'';
+    return {speedLabel,orderSummary,mechanicNotes,rotationSummary,specialistSummary};
+  }
+  const api = {operatorPreview, phaseNames, maxElite, maxLevel, moveOperator, sortOperators, income, segmentMode, fiammettaOwned, roomDecisionInfo};
   root.BaseView = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

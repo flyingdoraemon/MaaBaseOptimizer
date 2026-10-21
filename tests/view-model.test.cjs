@@ -43,6 +43,26 @@ test('Fiammetta option follows the actual operator id after adding and removing'
   assert.equal(view.fiammettaOwned([...original,{id:'char_300_phenxi',elite:0}]),true);
   assert.equal(view.fiammettaOwned([{id:'unrelated',name:'菲亚梅塔'}]),false);
 });
+test('trade explanations separate order speed from Proviso income and use actual room durations',()=>{
+  const room={room:'贸易站 1',key:'trade',trade:{expected_lmd:2250,expected_minutes:203.4,notes:['违约订单 +2 赤金']},mechanic_notes:['控制中枢 +7%']};
+  const rotation={schedule_mode:'staggered',objective_mode:'layout_output',collection_interval_hours:8,
+    room_work_hours:{'贸易站 1':{A:32,B:8}},room_duration_audit:{'贸易站 1':{scores:{A:2.73,B:1.98}}}};
+  const info=view.roomDecisionInfo(room,rotation,{});
+  assert.equal(info.speedLabel,'订单速度');
+  assert.match(info.orderSummary,/2,250.*203.4/);
+  assert.deepEqual(info.mechanicNotes,['控制中枢 +7%','违约订单 +2 赤金']);
+  assert.match(info.rotationSummary,/龙门币/);
+  assert.match(info.rotationSummary,/32h.*8h/);
+  assert.match(info.rotationSummary,/8h 上线/);
+  assert.equal(view.roomDecisionInfo({...room,key:'orundum',trade:null},rotation,{}).orderSummary,'');
+  assert.equal(view.roomDecisionInfo(room,{...rotation,schedule_mode:'fixed'},{}).rotationSummary,'');
+});
+test('recycler explanation uses the saved result ownership audit',()=>{
+  const room={key:'recycle'};
+  const missing={operator:'旅骨',owned:false,assignments:{}};
+  assert.match(view.roomDecisionInfo(room,{}, {recycle_specialists:[missing]}).specialistSummary,/旅骨.*未在本次计算/);
+  assert.equal(view.roomDecisionInfo(room,{}, {recycle_specialists:[{...missing,owned:true,assignments:{A:['回收站']}}]}).specialistSummary,'');
+});
 test('training, unlocked skills and facility efficiency use the selected promotion and level',()=>{
   const definitions=[{id:'a',name:'甲',rarity:6,previews:[{elite:0,level:1,skills:[1],efficiency:{gold:5,power:20}},{elite:1,level:1,skills:[1,2],efficiency:{gold:35,power:20}}]},
     {id:'b',name:'乙',rarity:4,previews:[{elite:0,level:1,skills:[1],efficiency:{gold:20,power:5}}]}];

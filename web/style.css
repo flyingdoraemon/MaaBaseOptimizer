@@ -146,3 +146,5 @@ input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-m
 .calculation-stages b{font-variant-numeric:tabular-nums;font-weight:500}
 .calculation-stages .is-current{opacity:1;color:var(--gold);font-weight:650}
 .calculation-stages .is-current span:before{content:'●';font-size:9px;margin-right:7px}
+.room-decision{margin:9px 0 0;color:var(--muted);font-size:14px;line-height:1.6}
+.room-head{flex-wrap:wrap}.room-head .eff{font-size:12px}

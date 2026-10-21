@@ -487,8 +487,24 @@ def _production_allocation_audit(result: dict, roster: list[dict], catalog: dict
                 for skill in skills if skill.get("room") in facility_names
             ],
         })
+    roster_by_id = {operator['id']: operator for operator in roster}
+    recycle_specialists = []
+    for operator_id, definition in catalog['operators'].items():
+        if not any(catalog['buffs'][unlock['buff']].get('room') == 'RECYCLE'
+                   for slot in definition.get('slots', []) for unlock in slot):
+            continue
+        owned = roster_by_id.get(operator_id)
+        recycle_specialists.append({
+            'operator_id': operator_id, 'operator': definition['name'],
+            'owned': owned is not None,
+            'efficiency': sum(float(skill.get('efficiency') or 0)
+                              for skill in active_skills(owned, catalog)
+                              if skill.get('room') == 'RECYCLE') if owned is not None else 0,
+            'assignments': assigned.get(operator_id, {}),
+        })
     return {
         "multi_facility_operators": rows,
+        "recycle_specialists": recycle_specialists,
         "simultaneous_duplicates": duplicates,
         "constraint": "同一班次内每名干员至多进入一个设施；贸易、制造和发电候选在同一个集合打包问题中竞争。",
         "rotation_scope": "A/B 两班目前顺序生成，跨班不是联合全局最优证明；两班时段不重叠，未启用菲亚梅塔时干员也不会跨班复用。",
