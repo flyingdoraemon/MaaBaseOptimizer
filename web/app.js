@@ -503,9 +503,21 @@ function renderRotation(rotation) {
     const detail=`<div class="segment-popover-title"><b>${escapeHtml(room.room)} · ${event.team} 班</b><span>${time}${event.continuation?' · 延续前一日夜班':''}</span><small>实际在岗 ${event.scheduled_work_hours}h · 最低结束心情 ${event.morale_min_end??'—'}</small></div>${teamOperatorInfo(event)}`;
     return `<button type="button" class="timeline-event room-event work-${event.team.toLowerCase()} segment-compact" data-count="${event.names.length}" style="left:${left}%;width:${width}%" ${popoverData(detail)} aria-label="${escapeHtml(`${room.room}，${time}，${event.team} 班，${event.names.join('、')}，查看名单与技能`)}"><span class="room-team">${event.team}</span><span class="segment-count">${event.names.length}人</span><span class="operator-chips">${event.names.map((name,index)=>`<span class="timeline-person">${operatorAvatar(event.operators[index],name,'timeline-avatar')}${eliteIcon(event.operator_profiles?.[index]?.elite,'timeline-elite')}<b>${escapeHtml(name)}</b></span>`).join('')}</span></button>`;
   }).join('')}</div></div>`).join('');
-  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>设施 / 班组</strong><div>${ticks}</div></div>${rows}<p class="timeline-note">停留片刻查看名单，移入浮窗可展开全组技能，移开后自动关闭。时间轴从第一天零点开始。</p>`;
+  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>设施 / 班组</strong><div>${ticks}</div></div>${rows}<p class="timeline-note">停留片刻查看名单，移入浮窗可展开全组技能，移开后自动关闭。横向滚动查看后续班次，时间轴从第一天零点开始。</p>`;
   requestAnimationFrame(fitTimelineSegments);
 }
+
+let timelineZoom=200;
+function setTimelineZoom(value) {
+  timelineZoom=Math.max(100,Math.min(400,value));
+  $("operatorTimeline").style.setProperty('--timeline-width',`${1200*timelineZoom/100}px`);
+  $("timelineZoomLabel").textContent=`${timelineZoom}%`;
+  $("timelineZoomOut").disabled=timelineZoom===100;
+  $("timelineZoomIn").disabled=timelineZoom===400;
+  requestAnimationFrame(fitTimelineSegments);
+}
+$("timelineZoomOut").addEventListener('click',()=>setTimelineZoom(timelineZoom-50));
+$("timelineZoomIn").addEventListener('click',()=>setTimelineZoom(timelineZoom+50));
 
 function fitTimelineSegments() {
   document.querySelectorAll('.room-event').forEach(element=>{

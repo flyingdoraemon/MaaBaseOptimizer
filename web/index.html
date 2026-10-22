@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark light">
   <title>基建调度 · Maa Base</title>
-  <link rel="stylesheet" href="/style.css?v=21">
+  <link rel="stylesheet" href="/style.css?v=22">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到排班工作区</a>
@@ -95,7 +95,7 @@
         </div>
 
         <div class="tab-panel" data-tab-panel="schedule">
-          <article class="panel rotation-panel"><div class="card-heading"><div><span class="card-kicker">ROTATION</span><h2>轮换运行图</h2></div><span id="rotationPattern" class="live-pill">等待排程</span></div><div class="timeline-legend"><span><i class="work-a"></i>A 班</span><span><i class="work-b"></i>B 班</span><span><i class="collect"></i>收取</span><span><i class="drone"></i>无人机</span></div><div id="operatorTimeline" class="operator-timeline"></div></article>
+          <article class="panel rotation-panel"><div class="card-heading"><div><span class="card-kicker">ROTATION</span><h2>轮换运行图</h2></div><span id="rotationPattern" class="live-pill">等待排程</span></div><div class="timeline-toolbar"><div class="timeline-legend"><span><i class="work-a"></i>A 班</span><span><i class="work-b"></i>B 班</span><span><i class="collect"></i>收取</span><span><i class="drone"></i>无人机</span></div><div class="timeline-zoom" role="group" aria-label="时间轴缩放"><span>横向缩放</span><button id="timelineZoomOut" type="button" aria-label="缩小时间轴">−</button><output id="timelineZoomLabel" aria-live="polite">200%</output><button id="timelineZoomIn" type="button" aria-label="放大时间轴">＋</button></div></div><div id="operatorTimeline" class="operator-timeline"></div></article>
           <div class="room-section-head"><div><span class="card-kicker">ASSIGNMENT</span><h2>设施排班</h2></div><span>按设施比较 A / B 班</span></div><div id="rooms" class="team-rooms"></div>
         </div>
 
@@ -126,6 +126,6 @@
   <script src="/vendor/echarts.min.js"></script>
   <script src="/view-model.js"></script>
   <script src="/roster.js"></script>
-  <script src="/app.js?v=21"></script>
+  <script src="/app.js?v=22"></script>
 </body>
 </html>

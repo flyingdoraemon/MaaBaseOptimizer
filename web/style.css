@@ -177,14 +177,18 @@ summary::-webkit-details-marker {display:none}
 /* A bounded, horizontally scrollable 72-hour plot. Short segments never shrink portraits. */
 .rotation-panel {padding-bottom:16px}
 .rotation-panel .card-heading {flex-wrap:wrap}
-.timeline-legend {display:flex;align-items:center;gap:18px;margin:0 0 12px;font-size:12px;color:var(--muted)}
+.timeline-toolbar {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px}
+.timeline-zoom {display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+.timeline-zoom button {width:32px;height:30px;padding:0;font-size:17px}
+.timeline-zoom output {min-width:42px;text-align:center;font:12px var(--mono);color:var(--text)}
+.timeline-legend {display:flex;align-items:center;gap:18px;margin:0;font-size:12px;color:var(--muted)}
 .timeline-legend i {display:inline-block;width:10px;height:8px;margin-right:5px}
 .timeline-legend .work-a {background:var(--cyan)}
 .timeline-legend .work-b {background:var(--blue)}
 .timeline-legend .collect {background:var(--strong-line);width:2px}
 .timeline-legend .drone {background:var(--action)}
 .operator-timeline {max-height:590px;overflow:auto;border:1px solid var(--line);scrollbar-width:thin}
-.timeline-axis,.timeline-row {display:grid;grid-template-columns:124px minmax(0,1fr);min-width:1200px}
+.timeline-axis,.timeline-row {display:grid;grid-template-columns:124px minmax(0,1fr);min-width:var(--timeline-width,2400px)}
 .timeline-axis {position:sticky;top:0;z-index:8;background:var(--surface-2);height:48px;border-bottom:1px solid var(--line)}
 .timeline-axis>strong,.timeline-row>strong {position:sticky;left:0;z-index:5;background:var(--surface);border-right:1px solid var(--line);display:flex;align-items:center;padding:10px 12px;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .timeline-axis>strong {background:var(--surface-2);font-size:12px;color:var(--muted)}
