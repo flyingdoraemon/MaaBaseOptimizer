@@ -74,3 +74,17 @@ test('training, unlocked skills and facility efficiency use the selected promoti
   assert.equal(view.operatorPreview(owned[0],byId).skills.length,1);
   assert.equal(view.operatorPreview({...owned[0],elite:1,level:1},byId).skills.length,2);
 });
+test('facility comparison pairs matching rooms even when the second team is reordered',()=>{
+  const a={room:'贸易站1',names:['但书']},b={room:'贸易站1',names:['拉普兰德']},power={room:'发电站1',names:['红云']};
+  const result={rotation:{teams:{A:{rooms:[a],support_rooms:[power]},B:{rooms:[{room:'制造站1',names:['温蒂']},b]}}}};
+  const before=JSON.stringify(result),facilities=view.facilityAssignments(result);
+  assert.deepEqual(facilities.map(x=>x.name),['贸易站1','发电站1','制造站1']);
+  assert.deepEqual(facilities[0].teams.map(x=>[x.team,x.room.names[0]]),[['A','但书'],['B','拉普兰德']]);
+  assert.equal(facilities[1].teams[0].room,power);
+  assert.equal(JSON.stringify(result),before);
+});
+test('facility comparison includes a single-team plan and every support facility',()=>{
+  const result={rooms:[{room:'制造站1'}],support_rooms:[{room:'回收站'},{room:'控制中枢'}]};
+  assert.deepEqual(view.facilityAssignments(result).map(x=>[x.name,x.teams.map(t=>t.team)]),[['制造站1',['A']],['回收站',['A']],['控制中枢',['A']]]);
+  assert.deepEqual(view.facilityAssignments({}),[]);
+});

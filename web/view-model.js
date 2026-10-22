@@ -52,7 +52,18 @@
     const specialistSummary=missing.length?`${missing.join('、')}未在本次计算的 Box 中，可在干员管理中补充。`:'';
     return {speedLabel,orderSummary,mechanicNotes,rotationSummary,specialistSummary};
   }
-  const api = {operatorPreview, phaseNames, maxElite, maxLevel, moveOperator, sortOperators, income, segmentMode, fiammettaOwned, roomDecisionInfo};
+  function facilityAssignments(result) {
+    const teams=result.rotation?.teams||{A:{rooms:result.rooms||[],support_rooms:result.support_rooms||[]}};
+    const facilities=new Map();
+    for(const [team,plan] of Object.entries(teams)) {
+      for(const room of [...(plan.rooms||[]),...(plan.support_rooms||[])]) {
+        if(!facilities.has(room.room))facilities.set(room.room,{name:room.room,teams:[]});
+        facilities.get(room.room).teams.push({team,room});
+      }
+    }
+    return [...facilities.values()];
+  }
+  const api = {facilityAssignments, operatorPreview, phaseNames, maxElite, maxLevel, moveOperator, sortOperators, income, segmentMode, fiammettaOwned, roomDecisionInfo};
   root.BaseView = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

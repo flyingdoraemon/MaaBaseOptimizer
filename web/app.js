@@ -4,21 +4,40 @@ const $ = (id) => document.getElementById(id);
 function setTheme(theme) {
   document.documentElement.dataset.theme=theme;
   localStorage.setItem("maaBaseTheme",theme);
-  $("themeToggle").textContent=theme==="light" ? "◐ 深色" : "☀︎ 浅色";
+  $("themeToggle").textContent=theme==="light" ? "深色模式" : "浅色模式";
   if (state.lastResult) requestAnimationFrame(() => {
     renderYieldCurve(state.lastResult?.rotation?.production_curve);
 
   });
 }
-setTheme(localStorage.getItem("maaBaseTheme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+setTheme(localStorage.getItem("maaBaseTheme") || "light");
 $("themeToggle").addEventListener("click",()=>setTheme(document.documentElement.dataset.theme==="light" ? "dark" : "light"));
 
 function selectResultTab(name) {
-  document.querySelectorAll("[data-result-tab]").forEach(button => button.classList.toggle("active", button.dataset.resultTab === name));
+  document.querySelectorAll("[data-result-tab]").forEach(button => {
+    const active=button.dataset.resultTab===name;
+    button.classList.toggle("active",active);button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1;
+  });
   document.querySelectorAll("[data-tab-panel]").forEach(panel => panel.classList.toggle("active", panel.dataset.tabPanel === name));
-  requestAnimationFrame(() => Object.values(state.charts).forEach(chart => chart?.resize()));
+  requestAnimationFrame(() => {Object.values(state.charts).forEach(chart => chart?.resize());fitYieldChart();fitTimelineSegments();});
 }
-document.querySelectorAll("[data-result-tab]").forEach(button => button.addEventListener("click", () => selectResultTab(button.dataset.resultTab)));
+const resultTabs=[...document.querySelectorAll('[data-result-tab]')];
+resultTabs[0].parentElement.setAttribute('role','tablist');
+resultTabs.forEach((button,index)=>{
+  const name=button.dataset.resultTab,panel=document.querySelector(`[data-tab-panel="${name}"]`);
+  button.id=`tab-${name}`;button.setAttribute('role','tab');button.setAttribute('aria-controls',`panel-${name}`);
+  panel.id=`panel-${name}`;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);panel.tabIndex=0;
+  button.addEventListener('click',()=>selectResultTab(name));
+  button.addEventListener('keydown',event=>{
+    let next;
+    if(event.key==='ArrowRight')next=(index+1)%resultTabs.length;
+    if(event.key==='ArrowLeft')next=(index+resultTabs.length-1)%resultTabs.length;
+    if(event.key==='Home')next=0;
+    if(event.key==='End')next=resultTabs.length-1;
+    if(next==null)return;
+    event.preventDefault();selectResultTab(resultTabs[next].dataset.resultTab);resultTabs[next].focus();
+  });
+});
 
 async function request(path, options = {}) {
   const response = await fetch(path, options);
@@ -32,6 +51,7 @@ function renderCalculationProgress(id, job) {
   const node=$(id), progress=job.progress||{}, times=progress.stage_seconds||{};
   node.hidden=false;
   node.innerHTML=`<div class="calculation-heading"><strong>${job.status==='completed'?'计算完成':job.status==='failed'?'计算失败':escapeHtml(calculationStages[progress.stage]||'正在计算')}</strong><span>${(+progress.elapsed_seconds||0).toFixed(1)} 秒</span></div>${job.status==='completed'?'':`<p>${escapeHtml(progress.detail||'正在协调各房间方案')}</p>`}<div class="calculation-stages">${Object.entries(calculationStages).filter(([key])=>!['preparing','queued'].includes(key)).map(([key,label])=>`<div class="${key===progress.stage&&job.status==='running'?'is-current':''}"><span>${label}</span><b>${times[key]==null?'—':`${times[key].toFixed(1)} s`}</b></div>`).join('')}</div>`;
+  if(job.status==='completed')node.innerHTML=`<details class="calculation-complete"><summary>计算完成 · ${(+progress.elapsed_seconds||0).toFixed(1)} 秒 · 查看用时</summary>${node.innerHTML}</details>`;
 }
 
 async function calculationJob(kind, payload, onProgress) {
@@ -191,10 +211,10 @@ $("fileInput").addEventListener("change", async event => {
   event.target.value = "";
 });
 
-const layoutSizes = {243:{trade:2,factory:4},153:{trade:1,factory:5},333:{trade:3,factory:3}};
+const layoutSizes = {243:{trade:2,factory:4,power:3},153:{trade:1,factory:5,power:3},333:{trade:3,factory:3,power:3}};
 function updateLayoutControls() {
   const layout=layoutSizes[$("baseLayout").value];
-  const previousExp=+("value" in $("expFactories") ? $("expFactories").value : 1) || 1;
+  const previousExp=$("expFactories").options.length ? +$("expFactories").value : 1;
   const previousShard=+$('shardFactories').value || 0;
   $("expFactories").innerHTML=Array.from({length:layout.factory+1},(_,i)=>`<option value="${i}">${i} 间</option>`).join("");
   $("shardFactories").innerHTML=Array.from({length:layout.factory+1},(_,i)=>`<option value="${i}">${i} 间</option>`).join("");
@@ -212,13 +232,32 @@ function updateProductControls() {
   $("orundumTrades").innerHTML=Array.from({length:layout.trade+1},(_,i)=>`<option value="${i}">${i} 间</option>`).join("");
   $("orundumTrades").value=Math.min(prev,layout.trade);
   $("shardRecipe").disabled=!shard;
+  renderBasePreview();
 }
+function renderBasePreview() {
+  const layout=layoutSizes[$("baseLayout").value], exp=+$("expFactories").value, shard=+$("shardFactories").value, trades=+$("orundumTrades").value;
+  const cell=(icon,label)=>`<div class="blueprint-cell">${resourceIcon(icon)}<span>${label}</span></div>`;
+  const row=(label,sub,cells)=>`<div class="blueprint-row"><div class="blueprint-label">${label}<small>${sub}</small></div><div class="blueprint-cells">${cells.join('')}</div></div>`;
+  $("basePreview").innerHTML=row('贸易站',`${layout.trade} ROOMS`,Array.from({length:layout.trade},(_,i)=>cell(i<trades?'orundum':'lmd',i<trades?'源石订单':'赤金订单')))
+    +row('制造站',`${layout.factory} ROOMS`,Array.from({length:layout.factory},(_,i)=>cell(i<exp?'battle-record':i<exp+shard?'originium-shard':'gold',i<exp?'作战记录':i<exp+shard?'源石碎片':'赤金')))
+    +row('辅助设施','SUPPORT',[...Array.from({length:layout.power},()=>cell('drone','发电站')),...(+$("recycleLevel").value?[`<div class="blueprint-cell utility"><b class="blueprint-symbol" aria-hidden="true">↻</b><span>${$("recycleLevel").value} 级回收站</span></div>`]:[])]);
+  $("previewInterval").textContent=`每 ${$("collectionInterval").value} 小时上线`;
+  $("previewWorkLimit").textContent=$("shiftHours").value==='36'?'按心情自动安排':`最长 ${$("shiftHours").value} 小时`;
+  $("previewWorkLimit").nextElementSibling.textContent=$("scheduleMode").selectedOptions[0].textContent;
+  $("layoutChoices").querySelectorAll('button').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.layout===$("baseLayout").value)));
+}
+$("layoutChoices").addEventListener('click',event=>{
+  const button=event.target.closest('[data-layout]');if(!button)return;
+  $("baseLayout").value=button.dataset.layout;$("baseLayout").dispatchEvent(new Event('change'));
+});
+['collectionInterval','shiftHours','scheduleMode','recycleLevel'].forEach(id=>$(id).addEventListener('change',()=>renderBasePreview()));
 $("baseLayout").addEventListener("change",updateLayoutControls);
 $("expFactories").addEventListener("change",updateProductControls);
 $("shardFactories").addEventListener("change",updateProductControls);
 $("orundumTrades").addEventListener("change",updateProductControls);
 $("scheduleMode").addEventListener("change",()=>{
   if($("scheduleMode").value==="fixed" && ![8,12].includes(+("value" in $("shiftHours") ? $("shiftHours").value : 8))) $("shiftHours").value="8";
+  renderBasePreview();
 });
 updateLayoutControls();
 
@@ -265,7 +304,7 @@ $("optimizeButton").addEventListener("click", async () => {
     const data = await calculationJob('optimize',payload,job=>renderCalculationProgress('solveProgress',job));
     renderResults(data);
   } catch (error) { message("solveMessage", error.message, true); }
-  finally { button.disabled = false; button.innerHTML = "<span>开始计算</span><b>→</b>"; }
+  finally { button.disabled = false; button.innerHTML = "<span>生成排班</span><b aria-hidden=\"true\">↗</b>"; }
 });
 
 function renderResults(data) {
@@ -275,12 +314,13 @@ function renderResults(data) {
   const m = data.rotation?.average_metrics || data.metrics;
   $("emptyState").classList.add("hidden");
   $("results").classList.remove("hidden");
-  selectResultTab("overview");
-  $("solverBadge").textContent = data.solver;
-  $("lmdKpi").textContent = number(BaseView.income(m).net);
+  selectResultTab("schedule");
+  $("solverBadge").textContent = `${data.rotation?.display_hours||24} 小时排程 · 每 ${data.rotation?.collection_interval_hours||$("collectionInterval").value} 小时上线`;
+  $("solverBadge").title=data.solver;
+  $("lmdKpi").textContent = number(Math.round(BaseView.income(m).net));
   $("lmdKpi").classList.toggle('negative',BaseView.income(m).net<0);
   $("lmdKpiNote").textContent = incomeBreakdown(m);
-  $("expKpi").textContent = number(m.exp_per_day);
+  $("expKpi").textContent = number(Math.round(m.exp_per_day));
   $("goldKpi").textContent = `${m.gold_net_per_day >= 0 ? "+" : ""}${m.gold_net_per_day}`;
   $("goldKpi").style.color = m.gold_net_per_day < 0 ? "var(--red)" : "var(--gold)";
   $("goldKpiNote").textContent = `站内 ${signed(m.gold_production_net_per_day)} · 外部 +${m.gold_external_per_day}`;
@@ -304,35 +344,30 @@ function renderResults(data) {
   const coverage=data.catalog_mechanism_coverage;
   $("mechanismCoverage").textContent=coverage?`产出技能已适配 ${coverage.exact_count} / ${coverage.total_relevant} · 包含各精英阶段`:'';
   renderMorale(data.morale, data.rotation);
-  const teams = data.rotation?.teams || {A:{support_rooms:data.support_rooms||[],rooms:data.rooms}};
-  const workHours=data.rotation?.team_work_hours||{};
-  const cycleHours=Object.values(workHours).reduce((sum,value)=>sum+(+value||0),0)||24;
-  const staggered=data.rotation?.schedule_mode==="staggered";
-  const roomDurations=data.rotation?.room_work_hours||{};
-  $("rooms").innerHTML = Object.entries(teams).map(([team,plan])=>{
-    const share=(+workHours[team]||cycleHours)/cycleHours, tm=plan.metrics||{};
-    const teamSummary=staggered?'<p class="staggered-team-note">房间独立换班；设施卡展示配队基准和工时占比，总览收益按实际同时在岗干员计算。</p>':`<div class="team-cycle-summary"><div><span>周期占比</span><strong>${(share*100).toFixed(1)}%</strong><small>${workHours[team]||cycleHours}h / ${cycleHours}h</small></div><div><span>对图表龙门币贡献</span><strong>${number(Math.round(BaseView.income(tm).net*share))}</strong><small>本队满日等效 ${number(Math.round(BaseView.income(tm).net))}</small></div><div><span>对图表经验贡献</span><strong>${number(Math.round((+tm.exp_per_day||0)*share))}</strong><small>本队满日等效 ${number(Math.round(+tm.exp_per_day||0))}</small></div><div><span>对图表赤金净流贡献</span><strong>${signed((+tm.gold_net_per_day||0)*share)}</strong><small>本队满日等效 ${signed(+tm.gold_net_per_day||0)}</small></div></div>`;
-    return `<section class="team-room-group"><div class="team-room-title"><strong>${team} 队</strong><span>${staggered?"按设施查看工时":workHours[team] ? `每循环工作 ${workHours[team]} 小时` : "单班方案"}</span></div>${teamSummary}<div class="rooms">${[...(plan.support_rooms||[]),...(plan.rooms||[])].map(room => {
-    const event=(data.rotation?.rooms||[]).find(row=>row.room===room.room)?.events?.find(item=>item.team===team);
-    const roomShare=staggered?(+(roomDurations[room.room]?.[team]||0)/(Object.values(roomDurations[room.room]||{}).reduce((sum,h)=>sum+(+h||0),0)||24)):share;
-    const rates=event ? Object.values(event.morale_rates||{}).map(Number) : [];
-    const rateRange=rates.length ? `${Math.min(...rates)}${Math.max(...rates)!==Math.min(...rates)?`–${Math.max(...rates)}`:""}` : "—";
-    const output=roomOutput(room), totalEfficiency=room.key==="power" ? 5+(+room.efficiency||0) : (room.multiplier ? (+room.multiplier-1)*100 : null);
-    const decision=BaseView.roomDecisionInfo(room,data.rotation,data.allocation_audit);
-    return `
-    <article class="room">
-      <div class="room-head"><h3>${escapeHtml(room.room)}</h3><span class="eff">${totalEfficiency==null?`技能 +${room.efficiency}%`:`${decision.speedLabel} +${totalEfficiency.toFixed(2)}%`}</span></div>
-      <div class="names operator-line">${room.names.map((name,index)=>operatorBadge(room.operators[index],name,room.operator_profiles?.[index],"operator-avatar",(room.details||[]).find(d=>d.operator===name||d.operator===room.operators[index])?.skills||[])).join("")}</div>
-      ${output?`<div class="room-output"><span>当前配队的基准日产 · 未计无人机加速</span><strong>${escapeHtml(output)}</strong>${decision.orderSummary?`<small>${escapeHtml(decision.orderSummary)}</small>`:''}<small>按轮换占比 ${(roomShare*100).toFixed(1)}% 折算：${escapeHtml(roomOutput(room,roomShare))}</small></div>`:""}
-      ${event ? `<div class="endurance"><span>实际在岗 ${event.scheduled_work_hours}h</span><span>本组合安全上限 ${event.safe_work_hours}h</span><span>心情消耗 ${rateRange}/h</span></div>` : ""}
-      ${decision.rotationSummary?`<p class="room-decision">${escapeHtml(decision.rotationSummary)}</p>`:''}
-      ${decision.specialistSummary?`<p class="room-decision">${escapeHtml(decision.specialistSummary)}</p>`:''}
-      ${room.group ? `<span class="confidence">${escapeHtml(room.group)} · MAA 组合候选</span>` : `<span class="confidence">${room.confidence === "direct" ? "直接数值模型" : room.confidence === "state_model" ? "跨设施状态模型" : "保守估算"}</span>`}
-      <details class="room-details"><summary>效率与计算明细</summary><div class="eff-ledger">${totalEfficiency!=null?`<span>技能/状态 +${room.efficiency}%</span><span>${room.key==="power"?"基础 +5%":room.key==='recycle'?`设施 ×${room.recycle.base_multiplier} · 进驻 +${room.names.length}%${room.recycle.continuous_boost?' · 投料 +50%':''}`:`基础 +${room.names.length}%`}</span><span>${room.key==="power"?`充能 +${totalEfficiency.toFixed(2)}%`:`倍率 ×${(+room.multiplier).toFixed(4)}`}</span>`:""}</div>${decision.mechanicNotes.length ? `<div class="skills">机制：${decision.mechanicNotes.map(escapeHtml).join("；")}</div>` : ""}</details>
-    </article>`}).join("")}</div></section>`;
-  }).join("");
+  renderFacilityAssignments(data);
   runQuickSimulation(data);
   $("results").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+function renderFacilityAssignments(data) {
+  const rotation=data.rotation||{},workHours=rotation.team_work_hours||{},cycle=Object.values(workHours).reduce((sum,h)=>sum+(+h||0),0)||24;
+  $("rooms").innerHTML=BaseView.facilityAssignments(data).map(facility=>`<section class="facility-assignment"><header class="facility-title"><h3>${escapeHtml(facility.name)}</h3><small>${facility.teams.length>1?'A / B 轮换':'单班安排'}</small></header><div class="facility-teams">${facility.teams.map(({team,room})=>{
+    const event=rotation.rooms?.find(row=>row.room===room.room)?.events?.find(item=>item.team===team);
+    const durations=rotation.room_work_hours?.[room.room]||{};
+    const share=rotation.schedule_mode==='staggered'?(+durations[team]||0)/(Object.values(durations).reduce((sum,h)=>sum+(+h||0),0)||24):(+workHours[team]||cycle)/cycle;
+    const rates=event?Object.values(event.morale_rates||{}).map(Number):[];
+    const rateRange=rates.length?`${Math.min(...rates)}${Math.max(...rates)!==Math.min(...rates)?`–${Math.max(...rates)}`:''}`:'—';
+    const totalEfficiency=room.key==='power'?5+(+room.efficiency||0):(room.multiplier?(+room.multiplier-1)*100:null);
+    const decision=BaseView.roomDecisionInfo(room,rotation,data.allocation_audit),output=roomOutput(room);
+    return `<article class="room" data-team="${escapeHtml(team)}"><div class="room-head"><strong class="room-team-label">${escapeHtml(team)} 班${event?` / ${event.scheduled_work_hours}h`:''}</strong><span class="eff">${totalEfficiency==null?`技能 +${room.efficiency}%`:`${decision.speedLabel} +${totalEfficiency.toFixed(2)}%`}</span></div>
+      <div class="operator-line">${room.names.map((name,index)=>operatorBadge(room.operators[index],name,room.operator_profiles?.[index],"operator-avatar",(room.details||[]).find(d=>d.operator===name||d.operator===room.operators[index])?.skills||[])).join('')}</div>
+      ${output?`<div class="room-output"><strong>${escapeHtml(output)}</strong><span>配队基准日产 · 未计无人机</span>${decision.orderSummary?`<small>${escapeHtml(decision.orderSummary)}</small>`:''}</div>`:''}
+      ${event?`<div class="endurance"><span>在岗 ${event.scheduled_work_hours}h</span><span>安全上限 ${event.safe_work_hours}h</span></div>`:''}
+      <details class="room-details"><summary>配队与效率明细 ↗</summary>${decision.rotationSummary?`<p class="room-decision">${escapeHtml(decision.rotationSummary)}</p>`:''}${decision.specialistSummary?`<p class="room-decision">${escapeHtml(decision.specialistSummary)}</p>`:''}
+      ${output?`<p class="room-decision">工时占比 ${(share*100).toFixed(1)}% · 折算 ${escapeHtml(roomOutput(room,share))}</p>`:''}${event?`<p class="room-decision">心情消耗 ${rateRange} /h</p>`:''}
+      <div class="eff-ledger"><span>技能 / 状态 +${room.efficiency}%</span>${totalEfficiency!=null?`<span>${room.key==='power'?'基础 +5%':room.key==='recycle'?`设施 ×${room.recycle.base_multiplier} · 进驻 +${room.names.length}%${room.recycle.continuous_boost?' · 投料 +50%':''}`:`进驻 +${room.names.length}%`}</span><span>${room.key==='power'?`充能 +${totalEfficiency.toFixed(2)}%`:`倍率 ×${(+room.multiplier).toFixed(4)}`}</span>`:''}</div>
+      ${decision.mechanicNotes.length?`<p class="skills">${decision.mechanicNotes.map(escapeHtml).join('；')}</p>`:''}${room.group?`<small class="confidence">${escapeHtml(room.group)} · MAA 组合候选</small>`:''}</details></article>`;
+  }).join('')}</div></section>`).join('');
 }
 
 function renderAllocationAudit(audit) {
@@ -386,10 +421,10 @@ function renderProductionMonitor(m) {
   ];
   if (m.orundum_per_day > 0) rows.splice(2,0,{kind:"orundum",icon:"玉",name:"合成玉",total:m.orundum_per_day,unit:"/ 日",rate:m.orundum_per_day/24,note:`碎片净流 ${signed(m.shards_net_per_day)} / 日`});
   $("productionMonitor").innerHTML = rows.map(row => `<div class="machine-row ${row.kind}">
-    <span class="machine-icon">${row.icon}</span>
+    <span class="machine-icon">${resourceIcon(row.kind==="exp"?"battle-record":row.kind)}</span>
     <div class="machine-copy"><strong>${row.name}</strong><small>${escapeHtml(row.note)}</small></div>
     <div class="machine-rate"><strong>${number(Math.round(row.total))}</strong><span>${row.unit}</span><small>${number(Math.round(row.rate))} / 小时</small></div>
-    <i class="machine-pulse"></i>
+
   </div>`).join("");
 }
 
@@ -458,7 +493,7 @@ function renderRotation(rotation) {
   const axisStep=Math.max(2,Math.ceil(cycle/12));
   const tickHours=Array.from({length:Math.floor(cycle/axisStep)+1},(_,i)=>i*axisStep);
   if(tickHours.at(-1)!==cycle)tickHours.push(cycle);
-  const ticks=tickHours.map(hour=>`<span class="${hour===0?'axis-first':hour===cycle?'axis-last':''}" style="left:${hour/cycle*100}%">${hourLabel(hour)}</span>`).join('');
+  const ticks=tickHours.map(hour=>`<span class="${hour===0?'axis-first':hour===cycle?'axis-last':''}" style="left:${hour/cycle*100}%">${hourLabel(hour).split(" ").map((part,index)=>index?`<time>${part}</time>`:`<b>${part}</b>`).join('')}</span>`).join('');
   const droneEvents=(rotation.production_curve?.drone_events||[]).filter(event=>event.minute/60<=cycle);
   const collectionHours=[...new Set(droneEvents.map(event=>event.minute/60))];
   const collectionLines=collectionHours.filter(hour=>hour>0&&hour<cycle).map(hour=>`<i class="collection-line" style="left:${hour/cycle*100}%" title="${hourLabel(hour)} 收取"></i>`).join('');
@@ -507,10 +542,7 @@ function renderYieldCurve(curve) {
   const points=curve.points.filter(point=>point.minute<=displayHours*60);
   const final=+points.at(-1).cumulative[key]||0;
   const rates=points.map(point=>+point.rates_per_hour[key]||0);
-  const transitions=`${(state.lastResult?.rotation?.handover_events||[]).filter(event=>event.time<displayHours).length} 个时刻，见轮换运行图`;
-  const hours=state.lastResult?.rotation?.team_work_hours||{}, cycle=Object.values(hours).reduce((sum,value)=>sum+(+value||0),0);
-  const weighting=Object.entries(hours).map(([team,value])=>`${team} ${value}h`).join(" + ");
-  $("yieldCurve").innerHTML=`<div class="curve-summary"><div><span>${key==="drones_per_day"?`${displayHours}h 末库存`:`${displayHours}h 累计`}</span><strong>${signed(final)} ${escapeHtml(label)}</strong></div><div><span>${key==="drones_per_day"?"恢复速率范围":"小时速率范围"}</span><strong>${signed(Math.min(...rates))} ～ ${signed(Math.max(...rates))}</strong><small>每分钟 ${signed(Math.min(...rates)/60,3)} ～ ${signed(Math.max(...rates)/60,3)}</small></div><div><span>实际换班时刻</span><strong>${escapeHtml(transitions)}</strong></div><div><span>排程口径</span><strong>${escapeHtml(weighting||"房间独立")}</strong><small>${cycle?`平均工时仅作摘要；曲线按房间逐段积分`:`直接使用单班日产`}</small></div></div><div id="yieldChartCanvas" class="echart yield-echart" role="img" aria-label="${escapeHtml(label)}累计与实时速率"></div><p class="side-note">${escapeHtml(curve.note)}</p>`;
+  $("yieldCurve").innerHTML=`<div class="curve-summary"><div><span>${key==="drones_per_day"?`${displayHours}h 末库存`:`${displayHours}h 累计`}</span><strong>${signed(final)} ${escapeHtml(label)}</strong></div><div><span>${key==="drones_per_day"?"恢复速率范围":"每小时产出"}</span><strong>${signed(Math.min(...rates))} ～ ${signed(Math.max(...rates))}</strong></div></div><div id="yieldChartCanvas" class="echart yield-echart" role="img" aria-label="${escapeHtml(label)}累计与实时速率"></div>`;
   if (!window.echarts) return;
   state.charts.yield?.dispose();
   const colors=chartColors(), cumulativeLabel=key==="drones_per_day"?"当前库存":`累计${label}`;
@@ -520,20 +552,30 @@ function renderYieldCurve(curve) {
   });
   state.charts.yield=echarts.init(document.getElementById("yieldChartCanvas"));
   state.charts.yield.setOption({
-    animationDuration:450,color:[colors.accent,colors.blue,colors.cyan],
+    animationDuration:450,color:[colors.cyan,colors.blue,colors.accent],
     textStyle:{color:colors.muted,fontFamily:"-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"},
-    legend:{top:2,textStyle:{color:colors.text,fontSize:11}},
-    grid:{left:58,right:58,top:42,bottom:46},
+    legend:{top:2,textStyle:{color:colors.text,fontSize:12}},
+    grid:{left:54,right:48,top:42,bottom:46},
     tooltip:{trigger:"axis",backgroundColor:colors.surface,borderColor:colors.line,textStyle:{color:colors.text},formatter(items){const hour=items[0]?.axisValue??0;const rows=items.map(item=>item.data?.event?`${item.marker}无人机投入：<b>${number(item.data.event.drones_spent)}</b> 架<br>${(item.data.event.targets||[]).map(target=>`${escapeHtml(target.label)}：${number(target.drones)} 架（加速 ${number(target.drones*3)} 分钟）`).join("<br>")}`:`${item.marker}${item.seriesName}：<b>${number(Math.round(item.value[1]*1000)/1000)}</b>${item.seriesIndex===1?" /h":""}`);return `<b>${hour}h</b><br>${rows.join("<br>")}`;}},
     xAxis:{type:"value",min:0,max:displayHours,interval:Math.max(2,displayHours/12),axisLabel:{color:colors.muted,formatter:"{value}h"},axisLine:{lineStyle:{color:colors.line}},splitLine:{lineStyle:{color:colors.line,opacity:.55}}},
     yAxis:[{type:"value",name:"累计",nameTextStyle:{color:colors.muted},axisLabel:{color:colors.muted},splitLine:{show:false}},{type:"value",name:"每小时",nameTextStyle:{color:colors.muted},axisLabel:{color:colors.muted},splitLine:{show:false}}],
     dataZoom:[{type:"inside",xAxisIndex:0,filterMode:"none"},{type:"slider",xAxisIndex:0,height:15,bottom:7,brushSelect:false,borderColor:colors.line,fillerColor:colors.line,textStyle:{color:colors.muted}}],
     series:[
-      {name:cumulativeLabel,type:"line",showSymbol:false,smooth:.18,yAxisIndex:0,lineStyle:{width:3},areaStyle:{opacity:.08},data:points.map(point=>[point.minute/60,+point.cumulative[key]||0])},
+      {name:cumulativeLabel,type:"line",showSymbol:false,smooth:false,yAxisIndex:0,lineStyle:{width:3},areaStyle:{opacity:.08},data:points.map(point=>[point.minute/60,+point.cumulative[key]||0])},
       {name:"实时速率",type:"line",showSymbol:false,step:"end",yAxisIndex:1,lineStyle:{width:2,type:"dashed"},data:points.map(point=>[point.minute/60,+point.rates_per_hour[key]||0])},
       {name:"无人机投入",type:"scatter",yAxisIndex:0,symbolSize:9,data:droneData,tooltip:{formatter(params){const e=params.data.event;return `<b>${e.minute/60}h · ${e.team}</b><br>投入 ${number(Math.round(e.drones_spent))} 架<br>${(e.targets||[]).map(x=>`${escapeHtml(x.label)} ${number(Math.round(x.drones))}`).join("<br>")||"保留"}`;}}}
     ]
   });
+  fitYieldChart();
+}
+
+function fitYieldChart() {
+  const chart=state.charts.yield;
+  if(!chart)return;
+  const compact=$("yieldCurve").clientWidth<500;
+  const hours=state.lastResult?.rotation?.display_hours||state.lastResult?.rotation?.production_curve?.hours||24;
+  chart.resize();
+  chart.setOption({legend:{textStyle:{fontSize:compact?11:12}},grid:{top:compact?72:42},xAxis:{interval:Math.max(2,hours/(compact?4:12)),axisLabel:{hideOverlap:true}}});
 }
 
 $("curveMetric").addEventListener("click",event=>{const button=event.target.closest("[data-resource]");if(!button)return;curveMetric=button.dataset.resource;$("curveMetric").querySelectorAll("button").forEach(item=>item.setAttribute("aria-pressed",String(item===button)));renderYieldCurve(state.lastResult?.rotation?.production_curve);});
@@ -615,7 +657,7 @@ function renderSimulation(data) {
   $("simulationResult").classList.remove("hidden");
 }
 
-window.addEventListener("resize",()=>Object.values(state.charts).forEach(chart=>chart?.resize()));
+window.addEventListener("resize",()=>{Object.values(state.charts).forEach(chart=>chart?.resize());fitYieldChart();});
 
 let popoverTarget=null, popoverTimer=null, popoverOpenTimer=null;
 function hideOperatorPopover() {

@@ -17,7 +17,7 @@ function createRosterManager({getCatalog, getRoster, onSave, avatar, eliteIcon, 
   }
   function renderInspector() {
     const catalog = byId.get(selected), owned = draft.find(op=>op.id===selected);
-    if (!catalog) {node('rosterInspector').innerHTML='<p>点击头像选择干员，或直接拖到精英阶段行。支持键盘选择和点击调整。</p>';return;}
+    if (!catalog) {node('rosterInspector').innerHTML='<p>选择干员，查看技能并设置精英阶段。</p>';return;}
     const preview=BaseView.operatorPreview(owned||catalog,byId);
     node('rosterInspector').innerHTML=`<div class="inspector-identity">${avatar(catalog.id,catalog.name,'inspector-avatar')}<div><strong>${escape(catalog.name)}</strong><small>${catalog.rarity} 星 · ${escape(catalog.branch_name||'')} · ${owned?'已加入 Box':'候选干员'}</small></div></div><div class="phase-actions" aria-label="设置精英阶段">${[0,1,2].map(phase=>`<button type="button" data-phase="${phase}" ${phase>BaseView.maxElite(catalog.rarity)?'disabled':''} aria-pressed="${owned?.elite===phase}" title="${BaseView.phaseNames[phase]}">${eliteIcon(phase)}<span>${BaseView.phaseNames[phase]}</span></button>`).join('')}</div>${owned?`<label class="level-editor">等级<input id="rosterLevel" type="number" min="1" max="${BaseView.maxLevel(catalog.rarity,owned.elite)}" value="${owned.level||1}" aria-label="${escape(catalog.name)}的等级"></label><button type="button" class="quiet danger" data-phase="-1">移回候选池</button>`:''}`;
     node('rosterInspector').insertAdjacentHTML('beforeend',`<div class="roster-skill-preview"><div class="skill-icon-strip">${preview.skills.map(skill=>skillIcon(skill.icon,skill.name)).join('')}</div><span>已解锁 ${preview.skills.length} 项基建技能 · 所选设施 8h 单人加成 ${preview.efficiency[node('rosterFacility').value]||0}%</span><details class="skill-description-toggle"><summary>展示技能详情</summary>${preview.skills.map(skill=>`<p><b>${escape(skill.name)}</b> · ${escape(skill.description)}</p>`).join('')}</details></div>`);
@@ -107,5 +107,5 @@ function createRosterManager({getCatalog, getRoster, onSave, avatar, eliteIcon, 
     try{await onSave(draft);dialog.close();}catch(error){status(`保存失败：${error.message}`);}finally{button.disabled=false;}
   });
   node('clearButton').addEventListener('click',()=>{draft=[];render();status('已清空草稿。可关闭窗口取消，或保存后生效。');});
-  return {open(){draft=getRoster().map(op=>({...op}));byId=new Map(getCatalog().map(op=>[op.id,op]));selected=null;renderProfessions();status('拖动头像调整精英阶段；保存后应用到排班。');render();dialog.showModal();node('rosterFilter').focus();}};
+  return {open(){draft=getRoster().map(op=>({...op}));byId=new Map(getCatalog().map(op=>[op.id,op]));selected=null;renderProfessions();status('点击头像设置练度；精英分组支持拖动。保存后应用到排班。');render();dialog.showModal();node('rosterFilter').focus();}};
 }
