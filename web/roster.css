@@ -1,0 +1,180 @@
+/* The roster stays still while the selected operator's details scroll independently. */
+.roster-dialog {
+  width:min(1420px,calc(100vw - 48px));height:min(900px,calc(100dvh - 48px));
+  max-width:none;max-height:calc(100dvh - 48px);padding:0;overflow:hidden;
+  border:1px solid var(--line);border-radius:10px;background:var(--surface);
+}
+.roster-dialog[open] {display:flex;flex-direction:column}
+.roster-dialog .dialog-head {flex:none;padding:23px 28px 0;gap:16px}
+.roster-dialog .dialog-head h2 {font-size:23px;line-height:1.4;font-weight:650;margin:0}
+.roster-dialog .dialog-head h2>span {font-size:14px;font-weight:400;color:var(--muted);margin-left:10px}
+.roster-dialog .dialog-head h2>span b {font-weight:500}
+.roster-dialog .dialog-head .card-kicker {display:none}
+.roster-dialog .dialog-head button {font-size:14px;padding:7px 13px}
+.roster-toolbar {flex:none;display:flex;align-items:end;flex-wrap:wrap;gap:12px;padding:21px 28px 22px;border-bottom:1px solid var(--line)}
+.roster-toolbar label {display:block;min-width:100px}
+.roster-toolbar label>span {display:block;color:var(--muted);font-size:12px;line-height:1.4;margin-bottom:7px}
+.roster-toolbar .roster-search {flex:1;min-width:180px;max-width:330px}
+.roster-toolbar input,.roster-toolbar select {min-height:39px;padding:8px 11px;font-size:14px;border-radius:6px}
+.roster-toolbar select {padding-right:32px}
+.roster-view-switch {display:flex;align-items:center;gap:3px;padding:3px;background:var(--surface-2);border:1px solid var(--line);border-radius:7px;margin-left:auto}
+.roster-view-switch button {padding:7px 10px;border:1px solid transparent;background:transparent;border-radius:4px;font-size:13px;line-height:1.4;color:var(--muted);white-space:nowrap}
+.roster-view-switch button:hover {color:var(--text);background:var(--surface-3)}
+.roster-view-switch button[aria-pressed=true] {border-color:var(--line);background:var(--surface);color:var(--text);box-shadow:0 1px 2px #17283908}
+.roster-body {display:grid;grid-template-columns:minmax(0,1fr) 260px;flex:1;min-height:0;overflow:hidden}
+.roster-layout {display:grid;grid-template-columns:124px minmax(0,1fr);min-height:0;min-width:0;overflow:hidden}
+.profession-sidebar {padding:20px 12px 24px 18px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;border-right:1px solid var(--line)}
+.profession-sidebar button {display:block;text-align:left;width:100%;padding:9px 11px;margin-bottom:4px;font-size:14px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--muted)}
+.profession-sidebar button:hover {background:var(--surface-2);color:var(--text)}
+.profession-sidebar button[aria-pressed=true] {background:var(--surface-3);color:var(--text);font-weight:600}
+.profession-sidebar .branch-choice {padding:7px 9px 7px 18px;font-size:12px;line-height:1.5;font-weight:400}
+.profession-sidebar .branch-choice[aria-pressed=true] {background:var(--surface-2);color:var(--cyan);font-weight:500}
+.roster-scroll {min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;padding:23px 22px 28px}
+.game-roster-pool,.tier-pool {display:grid;grid-template-columns:repeat(auto-fill,minmax(87px,1fr));align-content:start;gap:14px 12px}
+.game-roster-pool {padding:1px 0 22px}
+.roster-tile {position:relative;display:block;min-width:0;height:124px;padding:0;border:1px solid var(--line);border-radius:5px;overflow:hidden;background:var(--surface-2);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;transition:border-color .12s,box-shadow .12s}
+.roster-tile:hover {background:var(--surface-2);border-color:var(--cyan)}
+.roster-tile.selected {border-color:var(--cyan);box-shadow:0 0 0 2px var(--cyan)}
+.pool-avatar {display:block;width:100%;height:94px;object-fit:cover;object-position:50% 28%;pointer-events:none;-webkit-user-drag:none}
+.roster-tile>strong {display:block;height:29px;line-height:28px;padding:0 5px;border-top:1px solid var(--line);color:var(--text);background:var(--surface);font-size:13px;font-weight:500;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile-rarity {position:absolute;left:5px;top:5px;display:flex;align-items:center;gap:2px;padding:0 4px;border-radius:3px;background:#17232dd9;color:#f3f4f4;font:500 10px/18px -apple-system,BlinkMacSystemFont,sans-serif;font-variant-numeric:tabular-nums}
+.tile-rarity>span {font-size:8px;opacity:.8}
+.roster-tile[data-rarity="6"] .tile-rarity>span {color:#f0b17d;opacity:1}
+.roster-tile[data-rarity="5"] .tile-rarity>span {color:#e1ce95;opacity:1}
+.tile-elite {position:absolute;right:5px;bottom:34px;width:23px;height:23px;object-fit:contain;filter:drop-shadow(0 1px 2px #0009)}
+.tile-level {position:absolute;left:5px;bottom:35px;line-height:17px;padding:0 4px;background:#17232dd9;border-radius:3px;color:#fff;font-size:10px;font-variant-numeric:tabular-nums}
+.roster-tier {display:grid;grid-template-columns:66px minmax(0,1fr);border:1px solid var(--line);border-radius:6px;margin-bottom:16px;background:var(--surface);overflow:hidden}
+.tier-heading {display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:16px 6px;background:var(--surface-2);border-right:1px solid var(--line)}
+.tier-heading strong {font-size:12px;font-weight:500}
+.tier-heading small {font-size:10px;color:var(--muted);white-space:nowrap}
+.tier-pool {padding:14px;grid-template-columns:repeat(auto-fill,minmax(75px,1fr));gap:12px 10px;min-height:116px}
+.tier-pool .roster-tile {height:112px}
+.tier-pool .pool-avatar {height:82px}
+.pool-empty {grid-column:1/-1;align-self:center;padding:24px 10px;color:var(--muted);font-size:14px;line-height:1.7}
+.candidate-pool {margin:6px 0 0;border-top:1px solid var(--line)}
+.candidate-pool>summary {padding:19px 0 16px;list-style:none;font-size:14px;font-weight:500;color:var(--text)}
+.candidate-pool>summary::before {content:'›';display:inline-block;width:15px;font-size:18px;line-height:1;color:var(--muted);transform:rotate(0deg);transform-origin:5px 50%;transition:transform .15s}
+.candidate-pool[open]>summary::before {transform:rotate(90deg)}
+.candidate-pool>summary>span {font-size:12px;font-weight:400;color:var(--muted);margin-left:6px}
+.candidate-pool>summary>small {display:block;font-size:12px;font-weight:400;color:var(--muted);margin-top:5px;padding-left:15px}
+.available-pool {padding:1px 0 10px;grid-template-columns:repeat(auto-fill,minmax(87px,1fr));gap:14px 12px;min-height:0}
+.available-pool .roster-tile {height:124px}
+.available-pool .pool-avatar {height:94px}
+.drag-over {outline:2px solid var(--cyan);outline-offset:-2px;background:var(--surface-2)}
+.dragging {opacity:.3}
+.roster-dialog .drag-ghost {position:fixed;z-index:20;pointer-events:none;opacity:.9;box-shadow:0 8px 24px #10232d33;cursor:grabbing}
+.roster-inspector {min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;padding:25px 22px;border-left:1px solid var(--line);background:var(--surface-2)}
+.inspector-empty {padding-top:6px}
+.inspector-empty h3 {font-size:16px;font-weight:550;margin-bottom:10px}
+.inspector-empty p {font-size:14px;line-height:1.8;color:var(--muted)}
+.inspector-empty small {display:block;font-size:12px;color:var(--muted);margin-top:20px}
+.inspector-identity {display:flex;align-items:center;gap:12px;margin-bottom:25px}
+.inspector-avatar {width:58px;height:66px;object-fit:cover;border-radius:4px;background:var(--surface-3)}
+.inspector-identity>div {min-width:0}
+.inspector-identity strong {display:block;font-size:20px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.inspector-identity small {display:block;font-size:12px;line-height:1.6;color:var(--muted);margin-top:3px}
+.inspector-membership {display:block;font-size:11px;line-height:1.7;color:var(--muted);margin-top:3px}
+.inspector-section {padding-top:20px;border-top:1px solid var(--line)}
+.inspector-section+.inspector-section {margin-top:23px}
+.inspector-section h3 {font-size:13px;font-weight:500;line-height:1.5;margin:0 0 13px}
+.inspector-section h3>span {font-weight:400;color:var(--muted);margin-left:5px}
+.phase-actions {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.phase-actions button {display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:9px 4px;border:1px solid var(--line);border-radius:5px;background:var(--surface);font-size:12px;white-space:nowrap}
+.phase-actions button[aria-pressed=true] {border-color:var(--cyan);color:var(--cyan);box-shadow:inset 0 0 0 1px var(--cyan)}
+.phase-actions button:disabled {cursor:not-allowed;opacity:.3}
+.phase-actions .elite-icon {width:29px;height:28px}
+.inspector-level-row {display:flex;justify-content:space-between;gap:14px;align-items:end;margin-top:18px}
+.level-editor {display:block;width:76px;font-size:12px;color:var(--muted)}
+.level-editor input {display:block;min-height:36px;padding:6px 9px;margin-top:5px;border-radius:5px;font-size:14px;color:var(--text)}
+.inspector-level-row>button {font-size:12px;padding:8px 0;border:0;background:transparent;white-space:nowrap}
+.inspector-level-row>button:hover {text-decoration:underline;background:transparent}
+.inspector-hint {font-size:12px;line-height:1.8;color:var(--muted);margin-top:12px}
+.roster-skill-preview .skill-icon-strip {display:flex;flex-wrap:wrap;gap:9px;margin:0 0 12px}
+.roster-skill-preview .skill-icon {width:31px;height:31px}
+.roster-skill-preview .skill-description-toggle summary {font-size:13px;color:var(--cyan);padding:2px 0;cursor:pointer}
+.inspector-skill {margin-top:16px}
+.inspector-skill>b {display:block;font-size:13px;font-weight:550}
+.inspector-skill>p {font-size:13px;line-height:1.85;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}
+.inspector-efficiency {padding-top:15px;margin-top:18px;border-top:1px solid var(--line)}
+.inspector-efficiency>span {display:block;font-size:12px;color:var(--muted);line-height:1.7}
+.inspector-efficiency>strong {display:block;font-size:21px;font-weight:500;font-variant-numeric:tabular-nums;margin-top:5px}
+.roster-footer {flex:none;display:flex;align-items:center;gap:12px;padding:17px 28px;border-top:1px solid var(--line);background:var(--surface)}
+.roster-footer p {flex:1;color:var(--muted);font-size:12px;line-height:1.7;margin:0}
+.roster-footer button {font-size:14px;white-space:nowrap;padding:9px 15px;border-radius:6px}
+.roster-footer .danger {border-color:transparent}
+@media(max-width:1100px) {
+  .roster-dialog {width:calc(100vw - 32px);height:calc(100dvh - 32px);max-height:calc(100dvh - 32px)}
+  .roster-dialog .dialog-head {padding:20px 22px 0}
+  .roster-toolbar {padding:18px 22px;gap:10px}
+  .roster-toolbar .roster-search {min-width:160px;max-width:none}
+  .roster-view-switch {margin-left:0}
+  .roster-layout {grid-template-columns:108px minmax(0,1fr)}
+  .profession-sidebar {padding:18px 9px}
+  .profession-sidebar button {padding-inline:9px}
+  .roster-scroll {padding:20px 18px}
+  .roster-footer {padding:15px 22px}
+}
+@media(max-width:800px) {
+  .roster-body {grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,.65fr)}
+  .roster-inspector {border-left:0;border-top:1px solid var(--line);padding:19px 22px;display:grid;grid-template-columns:minmax(170px,.8fr) minmax(210px,1fr);align-content:start;gap:18px 25px}
+  .inspector-empty {grid-column:1/-1;padding:0}
+  .inspector-empty h3 {margin-bottom:5px}
+  .inspector-empty small {margin-top:9px}
+  .inspector-identity {margin:0;align-self:start}
+  .inspector-section {border:0;padding:0}
+  .inspector-section+.inspector-section {margin:0}
+  .roster-skill-preview {grid-column:1/-1;border-top:1px solid var(--line);padding-top:16px}
+  .inspector-section h3 {margin-bottom:10px}
+  .phase-actions button {flex-direction:row;gap:4px;padding:6px 4px}
+  .phase-actions .elite-icon {width:24px;height:24px}
+  .inspector-level-row {justify-content:start;align-items:center;gap:20px;margin-top:12px}
+  .level-editor {display:flex;align-items:center;gap:9px;width:auto;white-space:nowrap}
+  .level-editor input {width:65px;margin:0}
+  .roster-toolbar .roster-search {flex:1 1 200px}
+}
+@media(max-width:560px) {
+  .roster-dialog {width:calc(100vw - 12px);height:calc(100dvh - 12px);max-height:calc(100dvh - 12px);border-radius:7px}
+  .roster-dialog .dialog-head {padding:16px 16px 0}
+  .roster-dialog .dialog-head h2 {font-size:21px}
+  .roster-dialog .dialog-head h2>span {font-size:12px;margin-left:7px}
+  .roster-toolbar {padding:15px 16px;gap:9px}
+  .roster-toolbar .roster-search {flex:1 1 100%;min-width:0}
+  .roster-toolbar label {flex:1;min-width:90px}
+  .roster-toolbar label>span {font-size:11px;margin-bottom:4px}
+  .roster-toolbar input,.roster-toolbar select {min-height:36px;padding-block:6px;font-size:13px}
+  .roster-view-switch {width:auto}
+  .roster-view-switch button {font-size:12px;padding:5px 8px}
+  .roster-body {grid-template-rows:minmax(0,1fr) minmax(0,.65fr)}
+  .roster-layout {grid-template-columns:80px minmax(0,1fr)}
+  .profession-sidebar {padding:14px 7px}
+  .profession-sidebar button {font-size:12px;padding:8px 5px}
+  .profession-sidebar .branch-choice {font-size:11px;padding:7px 5px 7px 9px}
+  .roster-scroll {padding:16px 12px}
+  .game-roster-pool,.available-pool {grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:11px 9px}
+  .roster-tile,.available-pool .roster-tile {height:112px}
+  .pool-avatar,.available-pool .pool-avatar {height:82px}
+  .roster-tile>strong {font-size:12px}
+  .tile-elite {width:21px;height:21px}
+  .tile-level {font-size:9px;padding-inline:3px}
+  .roster-tier {grid-template-columns:44px minmax(0,1fr)}
+  .tier-heading {padding:12px 3px;gap:7px}
+  .tier-heading strong {font-size:10px}
+  .tier-heading small {font-size:9px}
+  .tier-heading .elite-icon {width:27px;height:26px}
+  .tier-pool {grid-template-columns:repeat(auto-fill,minmax(63px,1fr));padding:10px;gap:10px 8px}
+  .tier-pool .roster-tile {height:104px}
+  .tier-pool .pool-avatar {height:74px}
+  .candidate-pool>summary {font-size:13px}
+  .candidate-pool>summary>small {font-size:11px}
+  .pool-empty {padding:16px 4px;font-size:12px}
+  .roster-inspector {grid-template-columns:minmax(0,1fr);gap:17px;padding:17px 18px}
+  .roster-skill-preview {grid-column:auto}
+  .inspector-identity strong {font-size:18px}
+  .inspector-avatar {width:46px;height:52px}
+  .phase-actions {max-width:300px}
+  .phase-actions button {padding:7px;font-size:12px}
+  .roster-footer {padding:13px 16px;gap:9px;flex-wrap:wrap}
+  .roster-footer p {flex-basis:100%;font-size:11px}
+  .roster-footer button {font-size:13px;padding:8px 12px}
+  .roster-footer #clearButton {margin-left:auto}
+}

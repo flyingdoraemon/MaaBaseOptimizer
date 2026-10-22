@@ -32,8 +32,19 @@
   }
   function fiammettaOwned(roster) { return roster.some(op => op.id === "char_300_phenxi"); }
   function segmentMode(width, count) {
-    if (width < 44 + count * 38) return 'compact';
+    if (width < 35 + count * 15) return 'compact';
+    if (width < 44 + count * 38) return 'stacked';
     return width < 44 + count * 96 ? 'portraits' : 'full';
+  }
+  function timelineWindow(total, hours, start=0) {
+    const span=Math.min(Math.max(1,total),hours);
+    const from=Math.max(0,Math.min(start,total-span));
+    return {start:from,end:from+span,hours:span};
+  }
+  function clipTimelineEvent(event, window) {
+    const start=Math.max(event.start,window.start),end=Math.min(event.end,window.end);
+    if(end<=start)return null;
+    return {left:(start-window.start)/window.hours*100,width:(end-start)/window.hours*100};
   }
   function roomDecisionInfo(room, rotation={}, allocation={}) {
     const economy=room.key==='trade'?room.trade:room.key==='orundum'?room.orundum:null;
@@ -63,7 +74,7 @@
     }
     return [...facilities.values()];
   }
-  const api = {facilityAssignments, operatorPreview, phaseNames, maxElite, maxLevel, moveOperator, sortOperators, income, segmentMode, fiammettaOwned, roomDecisionInfo};
+  const api = {timelineWindow, clipTimelineEvent, facilityAssignments, operatorPreview, phaseNames, maxElite, maxLevel, moveOperator, sortOperators, income, segmentMode, fiammettaOwned, roomDecisionInfo};
   root.BaseView = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

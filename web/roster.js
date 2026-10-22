@@ -9,20 +9,22 @@ function createRosterManager({getCatalog, getRoster, onSave, avatar, eliteIcon, 
     const next = BaseView.moveOperator(draft, getCatalog(), id, phase);
     if (next === draft) return status('该干员不支持这个精英阶段。');
     draft = next; selected = id; render();
-    status(phase < 0 ? '已移回候选池，保存后生效。' : '已调整阶段；改变精英阶段时等级重置为 1，可在下方修改。');
+    status(phase < 0 ? '已移出名单，保存后生效。' : '精英阶段已更新，等级重置为 1；可在干员详情中修改。');
   }
   function card(op, owned) {
     const catalog = byId.get(op.id) || op;
-    return `<button type="button" class="roster-tile ${selected===op.id?'selected':''}" draggable="false" data-roster-id="${escape(op.id)}" aria-pressed="${selected===op.id}" aria-label="${escape(op.name)}，${catalog.rarity} 星，${owned?BaseView.phaseNames[op.elite]:'未加入'}" style="--rarity:${catalog.rarity}">${avatar(op.id,op.name,'pool-avatar')}<span class="tile-rarity">${'★'.repeat(catalog.rarity)}</span>${owned?eliteIcon(op.elite,'tile-elite')+`<span class="tile-level">Lv.${op.level||1}</span>`:''}<strong>${escape(op.name)}</strong></button>`;
+    return `<button type="button" class="roster-tile ${selected===op.id?'selected':''}" draggable="false" data-roster-id="${escape(op.id)}" data-rarity="${catalog.rarity}" aria-pressed="${selected===op.id}" aria-label="${escape(op.name)}，${catalog.rarity} 星，${owned?BaseView.phaseNames[op.elite]:'未加入'}">${avatar(op.id,op.name,'pool-avatar')}<span class="tile-rarity" aria-hidden="true">${catalog.rarity}<span>★</span></span>${owned?eliteIcon(op.elite,'tile-elite')+`<span class="tile-level">Lv.${op.level||1}</span>`:''}<strong>${escape(op.name)}</strong></button>`;
   }
   function renderInspector() {
     const catalog = byId.get(selected), owned = draft.find(op=>op.id===selected);
-    if (!catalog) {node('rosterInspector').innerHTML='<p>选择干员，查看技能并设置精英阶段。</p>';return;}
+    if (!catalog) {node('rosterInspector').innerHTML='<div class="inspector-empty"><h3>选择一名干员</h3><p>查看基建技能，调整精英阶段与等级。</p><small>所有调整保存后生效。</small></div>';return;}
     const preview=BaseView.operatorPreview(owned||catalog,byId);
-    node('rosterInspector').innerHTML=`<div class="inspector-identity">${avatar(catalog.id,catalog.name,'inspector-avatar')}<div><strong>${escape(catalog.name)}</strong><small>${catalog.rarity} 星 · ${escape(catalog.branch_name||'')} · ${owned?'已加入 Box':'候选干员'}</small></div></div><div class="phase-actions" aria-label="设置精英阶段">${[0,1,2].map(phase=>`<button type="button" data-phase="${phase}" ${phase>BaseView.maxElite(catalog.rarity)?'disabled':''} aria-pressed="${owned?.elite===phase}" title="${BaseView.phaseNames[phase]}">${eliteIcon(phase)}<span>${BaseView.phaseNames[phase]}</span></button>`).join('')}</div>${owned?`<label class="level-editor">等级<input id="rosterLevel" type="number" min="1" max="${BaseView.maxLevel(catalog.rarity,owned.elite)}" value="${owned.level||1}" aria-label="${escape(catalog.name)}的等级"></label><button type="button" class="quiet danger" data-phase="-1">移回候选池</button>`:''}`;
-    node('rosterInspector').insertAdjacentHTML('beforeend',`<div class="roster-skill-preview"><div class="skill-icon-strip">${preview.skills.map(skill=>skillIcon(skill.icon,skill.name)).join('')}</div><span>已解锁 ${preview.skills.length} 项基建技能 · 所选设施 8h 单人加成 ${preview.efficiency[node('rosterFacility').value]||0}%</span><details class="skill-description-toggle"><summary>展示技能详情</summary>${preview.skills.map(skill=>`<p><b>${escape(skill.name)}</b> · ${escape(skill.description)}</p>`).join('')}</details></div>`);
+    node('rosterInspector').innerHTML=`<div class="inspector-identity">${avatar(catalog.id,catalog.name,'inspector-avatar')}<div><strong>${escape(catalog.name)}</strong><small>${catalog.rarity} 星${catalog.branch_name?` · ${escape(catalog.branch_name)}`:''}</small><span class="inspector-membership">${owned?'已加入名单':'未加入名单'}</span></div></div><div class="inspector-section"><h3>精英阶段</h3><div class="phase-actions" role="group" aria-label="设置精英阶段">${[0,1,2].map(phase=>`<button type="button" data-phase="${phase}" ${phase>BaseView.maxElite(catalog.rarity)?'disabled':''} aria-pressed="${owned?.elite===phase}" title="${BaseView.phaseNames[phase]}">${eliteIcon(phase)}<span>${BaseView.phaseNames[phase]}</span></button>`).join('')}</div>${owned?`<div class="inspector-level-row"><label class="level-editor">等级<input id="rosterLevel" type="number" min="1" max="${BaseView.maxLevel(catalog.rarity,owned.elite)}" value="${owned.level||1}" aria-label="${escape(catalog.name)}的等级"></label><button type="button" class="quiet danger" data-phase="-1">移出名单</button></div>`:'<p class="inspector-hint">选择精英阶段，将干员加入名单。</p>'}</div>`;
+    const efficiencyMode=node('rosterSort').value==='efficiency',facility=node('rosterFacility');
+    node('rosterInspector').insertAdjacentHTML('beforeend',`<div class="roster-skill-preview inspector-section"><h3>基建技能 <span>${preview.skills.length}</span></h3>${preview.skills.length?`<div class="skill-icon-strip">${preview.skills.map(skill=>skillIcon(skill.icon,skill.name)).join('')}</div><details class="skill-description-toggle"><summary>查看技能描述</summary>${preview.skills.map(skill=>`<div class="inspector-skill"><b>${escape(skill.name)}</b><p>${escape(skill.description)}</p></div>`).join('')}</details>`:'<p class="inspector-hint">当前阶段尚未解锁基建技能。</p>'}${efficiencyMode?`<div class="inspector-efficiency"><span>${escape(facility.selectedOptions[0]?.textContent||'所选设施')} · 8h 单人加成</span><strong>${preview.efficiency[facility.value]||0}%</strong></div>`:''}</div>`);
   }
   function render() {
+    node('rosterFacility').closest('label').hidden=node('rosterSort').value!=='efficiency';
     const search = node('rosterFilter').value.trim().toLocaleLowerCase(), rarity = +node('rosterRarity').value;
     const matches = op => (!search || `${op.name} ${op.id}`.toLocaleLowerCase().includes(search)) && (!rarity || byId.get(op.id)?.rarity===rarity) && (!profession||byId.get(op.id)?.profession===profession) && (!branch||byId.get(op.id)?.branch===branch);
     const ownedIds = new Set(draft.map(op=>op.id));
@@ -30,7 +32,7 @@ function createRosterManager({getCatalog, getRoster, onSave, avatar, eliteIcon, 
     node('rosterDraftCount').textContent=draft.length;
     node('rosterTiers').innerHTML=view==='game'?`<div class="game-roster-pool">${sorted.filter(matches).map(op=>card(op,true)).join('')||'<p class="pool-empty">没有匹配的已拥有干员</p>'}</div>`:[2,1,0].map(phase=>{
       const all=sorted.filter(op=>op.elite===phase), visible=all.filter(matches);
-      return `<section class="roster-tier" data-drop-phase="${phase}"><div class="tier-heading">${eliteIcon(phase)}<strong>${BaseView.phaseNames[phase]}</strong><small>${visible.length} / ${all.length} 人</small></div><div class="tier-pool">${visible.map(op=>card(op,true)).join('')||'<p class="pool-empty">拖入干员，或使用下方阶段按钮</p>'}</div></section>`;
+      return `<section class="roster-tier" data-drop-phase="${phase}"><div class="tier-heading">${eliteIcon(phase)}<strong>${BaseView.phaseNames[phase]}</strong><small>${visible.length} / ${all.length} 人</small></div><div class="tier-pool">${visible.map(op=>card(op,true)).join('')||'<p class="pool-empty">拖入干员，或在详情中选择阶段</p>'}</div></section>`;
     }).join('');
     const available=BaseView.sortOperators(getCatalog().filter(op=>!ownedIds.has(op.id)&&matches(op)),byId,node('rosterSort').value,node('rosterFacility').value);
     node('rosterAvailableCount').textContent=available.length;

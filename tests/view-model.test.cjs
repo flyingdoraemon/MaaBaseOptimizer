@@ -37,6 +37,29 @@ test('22–24 hour bands never try to fit five portraits into a two-hour slot',(
   assert.equal(view.segmentMode(270,5),'portraits');
   assert.equal(view.segmentMode(600,5),'full');
 });
+test('short shifts retain stacked portraits when full portraits cannot fit',()=>{
+  assert.equal(view.segmentMode(90,3),'stacked');
+  assert.equal(view.segmentMode(120,5),'stacked');
+  assert.equal(view.segmentMode(79,3),'compact');
+});
+test('timeline pages reach the final day without an empty page or horizontal overflow',()=>{
+  assert.deepEqual(view.timelineWindow(72,24,24),{start:24,end:48,hours:24});
+  assert.deepEqual(view.timelineWindow(72,24,72),{start:48,end:72,hours:24});
+  assert.deepEqual(view.timelineWindow(72,48,48),{start:24,end:72,hours:48});
+  assert.deepEqual(view.timelineWindow(72,72,48),{start:0,end:72,hours:72});
+  assert.deepEqual(view.timelineWindow(24,72,-24),{start:0,end:24,hours:24});
+});
+test('cross-midnight shifts are clipped to the visible period without losing the original duration',()=>{
+  const event={start:0,end:32},secondDay=view.timelineWindow(72,24,24);
+  const clipped=view.clipTimelineEvent(event,secondDay);
+  assert.equal(clipped.left,0);assert.ok(Math.abs(clipped.width-100/3)<1e-12);
+  assert.deepEqual(event,{start:0,end:32});
+  assert.equal(view.clipTimelineEvent({start:0,end:24},secondDay),null);
+  assert.equal(view.clipTimelineEvent({start:48,end:72},secondDay),null);
+  const later=view.clipTimelineEvent({start:32,end:40},secondDay);
+  assert.ok(Math.abs(later.left-100/3)<1e-12);
+  assert.ok(later.left+later.width<=100);
+});
 test('Fiammetta option follows the actual operator id after adding and removing',()=>{
   const original=[{id:'char_123_fang',name:'芬'}];
   assert.equal(view.fiammettaOwned(original),false);

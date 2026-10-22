@@ -1,4 +1,4 @@
-const state = { catalog: [], byName: new Map(), roster: [], scanId: null, scanPoll: null, lastResult: null, quickSimSequence: 0, charts: { yield: null, bars: null } };
+const state = { catalog: [], byName: new Map(), roster: [], scanId: null, scanPoll: null, lastResult: null, resultSettingsSnapshot: null, quickSimSequence: 0, charts: { yield: null, bars: null } };
 const $ = (id) => document.getElementById(id);
 
 function setTheme(theme) {
@@ -12,6 +12,34 @@ function setTheme(theme) {
 }
 setTheme(localStorage.getItem("maaBaseTheme") || "light");
 $("themeToggle").addEventListener("click",()=>setTheme(document.documentElement.dataset.theme==="light" ? "dark" : "light"));
+
+function setSettingsOpen(open) {
+  $("planSettings").hidden=!open;
+  $("settingsToggle").setAttribute('aria-expanded',String(open));
+  $("settingsToggle").textContent=open?'收起设置':'排班设置';
+}
+$("settingsToggle").addEventListener('click',()=>setSettingsOpen($("planSettings").hidden));
+
+function captureSettingsSnapshot() {
+  const controls=Array.from($("planSettings").querySelectorAll('input, select'),input=>[
+    input.id,input.type==='checkbox'?input.checked:input.value,
+  ]).sort((a,b)=>a[0].localeCompare(b[0]));
+  const operators=state.roster.map(op=>[String(op.id),+op.elite||0,+op.level||1])
+    .sort((a,b)=>a[0].localeCompare(b[0]));
+  return JSON.stringify({controls,operators});
+}
+function updateSettingsChanged() {
+  const changed=!!state.lastResult && state.resultSettingsSnapshot!==null &&
+    state.resultSettingsSnapshot!==captureSettingsSnapshot();
+  $("settingsChanged").hidden=!changed;
+  return changed;
+}
+function acceptResultSettings(data, snapshot) {
+  state.lastResult=data;
+  state.resultSettingsSnapshot=snapshot;
+  setSettingsOpen(updateSettingsChanged());
+}
+['input','change'].forEach(type=>$("planSettings").addEventListener(type,updateSettingsChanged));
 
 function selectResultTab(name) {
   document.querySelectorAll("[data-result-tab]").forEach(button => {
@@ -84,6 +112,7 @@ function renderRoster() {
   const sorted=BaseView.sortOperators(state.roster,new Map(state.catalog.map(op=>[op.id,op])));
   $("rosterPreview").innerHTML=sorted.slice(0,5).map(op=>operatorAvatar(op.id,op.name,'preview-avatar')).join('') || '<span>＋</span>';
   saveRoster();
+  updateSettingsChanged();
 }
 
 function message(id, text, error = false) {
@@ -238,13 +267,15 @@ function renderBasePreview() {
   const layout=layoutSizes[$("baseLayout").value], exp=+$("expFactories").value, shard=+$("shardFactories").value, trades=+$("orundumTrades").value;
   const cell=(icon,label)=>`<div class="blueprint-cell">${resourceIcon(icon)}<span>${label}</span></div>`;
   const row=(label,sub,cells)=>`<div class="blueprint-row"><div class="blueprint-label">${label}<small>${sub}</small></div><div class="blueprint-cells">${cells.join('')}</div></div>`;
-  $("basePreview").innerHTML=row('贸易站',`${layout.trade} ROOMS`,Array.from({length:layout.trade},(_,i)=>cell(i<trades?'orundum':'lmd',i<trades?'源石订单':'赤金订单')))
-    +row('制造站',`${layout.factory} ROOMS`,Array.from({length:layout.factory},(_,i)=>cell(i<exp?'battle-record':i<exp+shard?'originium-shard':'gold',i<exp?'作战记录':i<exp+shard?'源石碎片':'赤金')))
-    +row('辅助设施','SUPPORT',[...Array.from({length:layout.power},()=>cell('drone','发电站')),...(+$("recycleLevel").value?[`<div class="blueprint-cell utility"><b class="blueprint-symbol" aria-hidden="true">↻</b><span>${$("recycleLevel").value} 级回收站</span></div>`]:[])]);
+  $("basePreview").innerHTML=row('贸易站',`${layout.trade} 间`,Array.from({length:layout.trade},(_,i)=>cell(i<trades?'orundum':'lmd',i<trades?'源石订单':'赤金订单')))
+    +row('制造站',`${layout.factory} 间`,Array.from({length:layout.factory},(_,i)=>cell(i<exp?'battle-record':i<exp+shard?'originium-shard':'gold',i<exp?'作战记录':i<exp+shard?'源石碎片':'赤金')))
+    +row('辅助设施','',[...Array.from({length:layout.power},()=>cell('drone','发电站')),...(+$("recycleLevel").value?[`<div class="blueprint-cell utility"><b class="blueprint-symbol" aria-hidden="true">↻</b><span>${$("recycleLevel").value} 级回收站</span></div>`]:[])]);
+  $("planSummary").textContent=`${$("baseLayout").value.split('').join('–')} 布局 · ${exp} 间经验 / ${shard} 间碎片 / ${layout.factory-exp-shard} 间赤金 · 每 ${$("collectionInterval").value} 小时上线`;
   $("previewInterval").textContent=`每 ${$("collectionInterval").value} 小时上线`;
   $("previewWorkLimit").textContent=$("shiftHours").value==='36'?'按心情自动安排':`最长 ${$("shiftHours").value} 小时`;
   $("previewWorkLimit").nextElementSibling.textContent=$("scheduleMode").selectedOptions[0].textContent;
   $("layoutChoices").querySelectorAll('button').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.layout===$("baseLayout").value)));
+  updateSettingsChanged();
 }
 $("layoutChoices").addEventListener('click',event=>{
   const button=event.target.closest('[data-layout]');if(!button)return;
@@ -272,6 +303,7 @@ $("optimizeButton").addEventListener("click", async () => {
   if ($("scheduleMode").value === "fixed" && ![8,12].includes(+("value" in $("shiftHours") ? $("shiftHours").value : 8))) return message("solveMessage", "固定轮班请选择 8 或 12 小时。", true);
   const button = $("optimizeButton"); button.disabled = true; button.textContent = "正在计算…";
   renderCalculationProgress('solveProgress',{status:'queued',progress:{stage:'queued'}});
+  const submittedSettings=captureSettingsSnapshot();
   const payload = {
     operators: state.roster,
     base_layout: $("baseLayout").value,
@@ -302,13 +334,13 @@ $("optimizeButton").addEventListener("click", async () => {
   };
   try {
     const data = await calculationJob('optimize',payload,job=>renderCalculationProgress('solveProgress',job));
-    renderResults(data);
+    renderResults(data,submittedSettings);
   } catch (error) { message("solveMessage", error.message, true); }
-  finally { button.disabled = false; button.innerHTML = "<span>生成排班</span><b aria-hidden=\"true\">↗</b>"; }
+  finally { button.disabled = false; button.textContent = "生成排班"; }
 });
 
-function renderResults(data) {
-  state.lastResult = data;
+function renderResults(data, submittedSettings=captureSettingsSnapshot()) {
+  acceptResultSettings(data,submittedSettings);
   hideOperatorPopover();
   popoverBodies.clear();
   const m = data.rotation?.average_metrics || data.metrics;
@@ -361,9 +393,8 @@ function renderFacilityAssignments(data) {
     const decision=BaseView.roomDecisionInfo(room,rotation,data.allocation_audit),output=roomOutput(room);
     return `<article class="room" data-team="${escapeHtml(team)}"><div class="room-head"><strong class="room-team-label">${escapeHtml(team)} 班${event?` / ${event.scheduled_work_hours}h`:''}</strong><span class="eff">${totalEfficiency==null?`技能 +${room.efficiency}%`:`${decision.speedLabel} +${totalEfficiency.toFixed(2)}%`}</span></div>
       <div class="operator-line">${room.names.map((name,index)=>operatorBadge(room.operators[index],name,room.operator_profiles?.[index],"operator-avatar",(room.details||[]).find(d=>d.operator===name||d.operator===room.operators[index])?.skills||[])).join('')}</div>
-      ${output?`<div class="room-output"><strong>${escapeHtml(output)}</strong><span>配队基准日产 · 未计无人机</span>${decision.orderSummary?`<small>${escapeHtml(decision.orderSummary)}</small>`:''}</div>`:''}
-      ${event?`<div class="endurance"><span>在岗 ${event.scheduled_work_hours}h</span><span>安全上限 ${event.safe_work_hours}h</span></div>`:''}
-      <details class="room-details"><summary>配队与效率明细 ↗</summary>${decision.rotationSummary?`<p class="room-decision">${escapeHtml(decision.rotationSummary)}</p>`:''}${decision.specialistSummary?`<p class="room-decision">${escapeHtml(decision.specialistSummary)}</p>`:''}
+      ${output?`<div class="room-output"><strong>${escapeHtml(output)}</strong><span>配队基准日产 · 未计无人机</span></div>`:''}
+      <details class="room-details"><summary>配队与效率明细</summary>${decision.orderSummary?`<p class="room-decision">${escapeHtml(decision.orderSummary)}</p>`:''}${event?`<p class="room-decision">安全工作上限 ${event.safe_work_hours}h</p>`:''}${decision.rotationSummary?`<p class="room-decision">${escapeHtml(decision.rotationSummary)}</p>`:''}${decision.specialistSummary?`<p class="room-decision">${escapeHtml(decision.specialistSummary)}</p>`:''}
       ${output?`<p class="room-decision">工时占比 ${(share*100).toFixed(1)}% · 折算 ${escapeHtml(roomOutput(room,share))}</p>`:''}${event?`<p class="room-decision">心情消耗 ${rateRange} /h</p>`:''}
       <div class="eff-ledger"><span>技能 / 状态 +${room.efficiency}%</span>${totalEfficiency!=null?`<span>${room.key==='power'?'基础 +5%':room.key==='recycle'?`设施 ×${room.recycle.base_multiplier} · 进驻 +${room.names.length}%${room.recycle.continuous_boost?' · 投料 +50%':''}`:`进驻 +${room.names.length}%`}</span><span>${room.key==='power'?`充能 +${totalEfficiency.toFixed(2)}%`:`倍率 ×${(+room.multiplier).toFixed(4)}`}</span>`:''}</div>
       ${decision.mechanicNotes.length?`<p class="skills">${decision.mechanicNotes.map(escapeHtml).join('；')}</p>`:''}${room.group?`<small class="confidence">${escapeHtml(room.group)} · MAA 组合候选</small>`:''}</details></article>`;
@@ -481,7 +512,16 @@ function hourLabel(hour) {
   return `D${day} ${String(Math.floor(within)).padStart(2,"0")}:00`;
 }
 
+const timelineView={hours:window.innerWidth<600?24:72,start:0,rotation:null,popovers:[]};
 function renderRotation(rotation) {
+  timelineView.rotation=rotation;timelineView.start=0;
+  renderTimelineWindow();
+}
+function renderTimelineWindow() {
+  const rotation=timelineView.rotation;
+  hideOperatorPopover();
+  timelineView.popovers.forEach(id=>popoverBodies.delete(id));timelineView.popovers=[];
+  const timelinePopover=html=>{const attr=popoverData(html);timelineView.popovers.push(String(popoverSerial));return attr;};
   if (!rotation) {
     $("rotationPattern").textContent="未生成第二队";
     $("operatorTimeline").innerHTML='<p class="side-note">当前 Box 不足以生成两套互斥班组。</p>';
@@ -490,39 +530,39 @@ function renderRotation(rotation) {
   const handoverTimes=(rotation.handover_events||[]).filter(node=>node.time<(rotation.display_hours||rotation.cycle_hours)).length;
   $("rotationPattern").textContent=`${rotation.display_hours||rotation.cycle_hours}h 安排 · ${handoverTimes} 个换班时刻 · 每 ${rotation.collection_interval_hours}h 上线`;
   const cycle=rotation.display_hours||rotation.cycle_hours;
-  const axisStep=Math.max(2,Math.ceil(cycle/12));
-  const tickHours=Array.from({length:Math.floor(cycle/axisStep)+1},(_,i)=>i*axisStep);
-  if(tickHours.at(-1)!==cycle)tickHours.push(cycle);
-  const ticks=tickHours.map(hour=>`<span class="${hour===0?'axis-first':hour===cycle?'axis-last':''}" style="left:${hour/cycle*100}%">${hourLabel(hour).split(" ").map((part,index)=>index?`<time>${part}</time>`:`<b>${part}</b>`).join('')}</span>`).join('');
-  const droneEvents=(rotation.production_curve?.drone_events||[]).filter(event=>event.minute/60<=cycle);
+  const view=BaseView.timelineWindow(cycle,timelineView.hours,timelineView.start);
+  timelineView.start=view.start;
+  const narrow=window.innerWidth<600,axisStep=view.hours/(narrow?2:6);
+  const tickHours=Array.from({length:(narrow?2:6)+1},(_,i)=>view.start+i*axisStep);
+  const ticks=tickHours.map(hour=>`<span class="${hour===view.start?'axis-first':hour===view.end?'axis-last':''}" style="left:${(hour-view.start)/view.hours*100}%">${hourLabel(hour).split(" ").map((part,index)=>index?`<time>${part}</time>`:`<b>${part}</b>`).join('')}</span>`).join('');
+  $("timelineWindowLabel").textContent=view.hours===24?`第 ${Math.floor(view.start/24)+1} 天`:`第 ${Math.floor(view.start/24)+1}–${Math.ceil(view.end/24)} 天`;
+  $("timelinePrevious").disabled=view.start===0;$("timelineNext").disabled=view.end>=cycle;
+  $("timelineRange").querySelectorAll('button').forEach(button=>button.setAttribute('aria-pressed',String(+button.dataset.timelineHours===timelineView.hours)));
+  const droneEvents=(rotation.production_curve?.drone_events||[]).filter(event=>event.minute/60>=view.start&&event.minute/60<=view.end);
   const collectionHours=[...new Set(droneEvents.map(event=>event.minute/60))];
-  const collectionLines=collectionHours.filter(hour=>hour>0&&hour<cycle).map(hour=>`<i class="collection-line" style="left:${hour/cycle*100}%" title="${hourLabel(hour)} 收取"></i>`).join('');
-  const rows=(rotation.rooms||[]).map(room=>`<div class="timeline-row room-timeline-row"><strong title="${escapeHtml(room.room)}">${escapeHtml(room.room)}</strong><div class="timeline-lane">${collectionLines}${droneEvents.flatMap(event=>(event.targets||[]).filter(target=>String(target.target||'').split('：')[0]===room.room).map(target=>`<button type="button" class="timeline-drone" style="left:${Math.min(99,event.minute/60/cycle*100)}%" ${popoverData(droneEventInfo(event,target))} aria-label="${hourLabel(event.minute/60)}，投入无人机 ${target.drones} 架">⚡</button>`)).join('')}${room.events.filter(event=>event.start<cycle).map(event=>{
-    const left=event.start/cycle*100, width=(Math.min(cycle,event.end)-event.start)/cycle*100;
+  const collectionLines=collectionHours.filter(hour=>hour>view.start&&hour<view.end).map(hour=>`<i class="collection-line" style="left:${(hour-view.start)/view.hours*100}%" title="${hourLabel(hour)} 收取"></i>`).join('');
+  const rows=(rotation.rooms||[]).map(room=>`<div class="timeline-row room-timeline-row"><strong title="${escapeHtml(room.room)}">${escapeHtml(room.room)}</strong><div class="timeline-lane">${collectionLines}${droneEvents.flatMap(event=>(event.targets||[]).filter(target=>String(target.target||'').split('：')[0]===room.room).map(target=>`<button type="button" class="timeline-drone" style="left:${Math.max(1,Math.min(99,(event.minute/60-view.start)/view.hours*100))}%" ${timelinePopover(droneEventInfo(event,target))} aria-label="${hourLabel(event.minute/60)}，投入无人机 ${target.drones} 架">⚡</button>`)).join('')}${room.events.filter(event=>BaseView.clipTimelineEvent(event,view)).map(event=>{
+    const {left,width}=BaseView.clipTimelineEvent(event,view);
     const time=`${hourLabel(event.start)}–${hourLabel(event.end)}`;
     const detail=`<div class="segment-popover-title"><b>${escapeHtml(room.room)} · ${event.team} 班</b><span>${time}${event.continuation?' · 延续前一日夜班':''}</span><small>实际在岗 ${event.scheduled_work_hours}h · 最低结束心情 ${event.morale_min_end??'—'}</small></div>${teamOperatorInfo(event)}`;
-    return `<button type="button" class="timeline-event room-event work-${event.team.toLowerCase()} segment-compact" data-count="${event.names.length}" style="left:${left}%;width:${width}%" ${popoverData(detail)} aria-label="${escapeHtml(`${room.room}，${time}，${event.team} 班，${event.names.join('、')}，查看名单与技能`)}"><span class="room-team">${event.team}</span><span class="segment-count">${event.names.length}人</span><span class="operator-chips">${event.names.map((name,index)=>`<span class="timeline-person">${operatorAvatar(event.operators[index],name,'timeline-avatar')}${eliteIcon(event.operator_profiles?.[index]?.elite,'timeline-elite')}<b>${escapeHtml(name)}</b></span>`).join('')}</span></button>`;
+    return `<button type="button" class="timeline-event room-event work-${event.team.toLowerCase()} segment-compact" data-count="${event.names.length}" style="left:${left}%;width:${width}%" ${timelinePopover(detail)} aria-label="${escapeHtml(`${room.room}，${time}，${event.team} 班，${event.names.join('、')}，查看名单与技能`)}"><span class="room-team">${event.team}</span><span class="segment-count">${event.names.length}人</span><span class="operator-chips">${event.names.map((name,index)=>`<span class="timeline-person">${operatorAvatar(event.operators[index],name,'timeline-avatar')}${eliteIcon(event.operator_profiles?.[index]?.elite,'timeline-elite')}<b>${escapeHtml(name)}</b></span>`).join('')}</span></button>`;
   }).join('')}</div></div>`).join('');
-  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>设施 / 班组</strong><div>${ticks}</div></div>${rows}<p class="timeline-note">停留片刻查看名单，移入浮窗可展开全组技能，移开后自动关闭。横向滚动查看后续班次，时间轴从第一天零点开始。</p>`;
+  $("operatorTimeline").innerHTML=`<div class="timeline-axis"><strong>设施 / 班组</strong><div>${ticks}</div></div>${rows}<p class="timeline-note">停留片刻查看全组技能。跨日班次按当前时间范围显示。</p>`;
   requestAnimationFrame(fitTimelineSegments);
 }
 
-let timelineZoom=200;
-function setTimelineZoom(value) {
-  timelineZoom=Math.max(100,Math.min(400,value));
-  $("operatorTimeline").style.setProperty('--timeline-width',`${1200*timelineZoom/100}px`);
-  $("timelineZoomLabel").textContent=`${timelineZoom}%`;
-  $("timelineZoomOut").disabled=timelineZoom===100;
-  $("timelineZoomIn").disabled=timelineZoom===400;
-  requestAnimationFrame(fitTimelineSegments);
-}
-$("timelineZoomOut").addEventListener('click',()=>setTimelineZoom(timelineZoom-50));
-$("timelineZoomIn").addEventListener('click',()=>setTimelineZoom(timelineZoom+50));
+$("timelineRange").addEventListener('click',event=>{
+  const button=event.target.closest('[data-timeline-hours]');if(!button)return;
+  timelineView.hours=+button.dataset.timelineHours;renderTimelineWindow();
+});
+$("timelinePrevious").addEventListener('click',()=>{timelineView.start-=timelineView.hours;renderTimelineWindow();});
+$("timelineNext").addEventListener('click',()=>{timelineView.start+=timelineView.hours;renderTimelineWindow();});
+window.matchMedia('(max-width:599px)').addEventListener('change',()=>{if(timelineView.rotation)renderTimelineWindow();});
 
 function fitTimelineSegments() {
   document.querySelectorAll('.room-event').forEach(element=>{
     const mode=BaseView.segmentMode(element.getBoundingClientRect().width,+element.dataset.count);
-    element.classList.remove('segment-compact','segment-portraits','segment-full');
+    element.classList.remove('segment-compact','segment-stacked','segment-portraits','segment-full');
     element.classList.add(`segment-${mode}`);
   });
 }
@@ -567,11 +607,10 @@ function renderYieldCurve(curve) {
     animationDuration:450,color:[colors.cyan,colors.blue,colors.accent],
     textStyle:{color:colors.muted,fontFamily:"-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"},
     legend:{top:2,textStyle:{color:colors.text,fontSize:12}},
-    grid:{left:54,right:48,top:42,bottom:46},
+    grid:{left:54,right:48,top:42,bottom:28},
     tooltip:{trigger:"axis",backgroundColor:colors.surface,borderColor:colors.line,textStyle:{color:colors.text},formatter(items){const hour=items[0]?.axisValue??0;const rows=items.map(item=>item.data?.event?`${item.marker}无人机投入：<b>${number(item.data.event.drones_spent)}</b> 架<br>${(item.data.event.targets||[]).map(target=>`${escapeHtml(target.label)}：${number(target.drones)} 架（加速 ${number(target.drones*3)} 分钟）`).join("<br>")}`:`${item.marker}${item.seriesName}：<b>${number(Math.round(item.value[1]*1000)/1000)}</b>${item.seriesIndex===1?" /h":""}`);return `<b>${hour}h</b><br>${rows.join("<br>")}`;}},
     xAxis:{type:"value",min:0,max:displayHours,interval:Math.max(2,displayHours/12),axisLabel:{color:colors.muted,formatter:"{value}h"},axisLine:{lineStyle:{color:colors.line}},splitLine:{lineStyle:{color:colors.line,opacity:.55}}},
     yAxis:[{type:"value",name:"累计",nameTextStyle:{color:colors.muted},axisLabel:{color:colors.muted},splitLine:{show:false}},{type:"value",name:"每小时",nameTextStyle:{color:colors.muted},axisLabel:{color:colors.muted},splitLine:{show:false}}],
-    dataZoom:[{type:"inside",xAxisIndex:0,filterMode:"none"},{type:"slider",xAxisIndex:0,height:15,bottom:7,brushSelect:false,borderColor:colors.line,fillerColor:colors.line,textStyle:{color:colors.muted}}],
     series:[
       {name:cumulativeLabel,type:"line",showSymbol:false,smooth:false,yAxisIndex:0,lineStyle:{width:3},areaStyle:{opacity:.08},data:points.map(point=>[point.minute/60,+point.cumulative[key]||0])},
       {name:"实时速率",type:"line",showSymbol:false,step:"end",yAxisIndex:1,lineStyle:{width:2,type:"dashed"},data:points.map(point=>[point.minute/60,+point.rates_per_hour[key]||0])},
